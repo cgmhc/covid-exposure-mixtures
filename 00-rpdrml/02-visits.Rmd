@@ -1,0 +1,224 @@
+---
+title: "RPDR-ML Visits"
+author: "Pratik Nitin Khadse"
+date: "2024-04-01"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+source(here::here("0-config.R"))
+
+# When testing can choose to only use a sample of rows to speed up iterations.
+sample_rows = Inf
+# sample_rows = 100000
+```
+
+Copied from ESP project
+
+## Import visits
+
+```{r import_visits}
+# Time:  mins (ErisOne)
+# Time: 1.5 mins (awing)
+system.time({
+  df = fread(paste0(dir_rpdrml, "RPDRml__visit.txt"),
+             # This could be all rows or a sample of rows.
+             nrows = sample_rows) 
+})
+
+# 570 MM rows
+dim(df)
+
+class(df)
+
+names(df)
+```
+
+## Integrate with diagnoses
+
+We need the diagnosis file to have the subject_num for a visit
+
+```{r integrate_diagnoses}
+diagnoses = fst::read.fst(here(paste0("data/rpdrml-", conf$rpdrml_version, "/diagnoses.fst")),
+                          as.data.table = TRUE)
+
+str(diagnoses)
+str(df)
+
+system.time({
+  df2 = merge(df,
+              # All we need is encounter number and subject_num out of the diagnosis file.
+              unique(diagnoses[, .(encounter_num, subject_num)],
+                     by = c("encounter_num", "subject_num")),
+              by = "encounter_num",
+              all.x = TRUE)
+})
+
+# These should be equal.
+c(nrow(df), nrow(df2))
+head(df2)
+
+# Why do 31.8 MM visits have no subject_num? I guess because they aren't part
+# of the study sample.
+sum(is.na(df2$subject_num))
+
+df3 = df2[!is.na(subject_num)]
+dim(df3)
+names(df3)
+```
+
+```{r}
+rm(diagnoses)
+gc()
+```
+
+
+## Load unshift file
+
+```{r load_unshift_file}
+# Hyunjoon received from Victor and shared with Chris via MGB Dropbox.
+unshift_df = fread(here("data-raw/RPDRml_v2024_1_empi_map.csv"))
+
+str(unshift_df)
+
+# 3 - 12 days
+table(unshift_df$random_offset)
+
+intersect(names(df3), names(unshift_df))
+
+names(unshift_df)
+
+# Left join relative to df.
+# Time: 1.4 seconds (awing)
+system.time({
+  df4 = merge(df3,
+              unshift_df[, .(subject_num, empi, random_offset)],
+              by = "subject_num", all.x = TRUE)
+})
+
+# 0 missing empi
+mean(is.na(df4$empi))
+# 419 records are missing empi - not too shabby.
+sum(is.na(df4$empi))
+
+df = df4
+
+# 8.9 MM rows.
+dim(df)
+
+# Clean up
+rm(unshift_df)
+rm(df2, df3, df4)
+gc()
+```
+
+## Clean dates
+
+
+
+
+```{r clean_dates}
+
+# No missing values
+sum(is.na(df$random_offset))
+
+# Incorporate the random offset from RPDR-ML
+# If it is missing, we'll get a missing value for sstart_date.
+# CK: changed these to + on 2022-10-22. Need to double-check that this is right.
+df[, start_date := lubridate::mdy(sstart_date) + random_offset]
+# TODO: confirm with Victor that end date needs to be modified.
+df[, end_date := lubridate::mdy(send_date) + random_offset]
+
+# Range: Aug 5, 1996 to April 8, 2023
+summary(df$start_date)
+# Nov. 5, 1994 to April 8, 2023; 725k NAs.
+summary(df$end_date)
+
+names(df)
+```
+
+## Remove extra cols
+
+```{r remove_extra_cols}
+head(df)
+remove_cols = c("clinic_cd", "clinic_name", "sstart_date", "send_date") # new start and end dates are stored with different column names
+
+
+# This line will show a warning in RStudio but we are intentionally leaving the row argument empty.
+data.table::set(df, , remove_cols, NULL)
+
+```
+
+## Save dataset
+
+```{r save_dataset}
+str(df)
+system.time({
+  fst::write.fst(df,
+                 here(paste0("data/rpdrml-", conf$rpdrml_version, "/visits.fst")))
+})
+
+# Clean up RAM
+rm(df)
+gc()
+```
+
+# DX-Visits dataset
+
+```{r dx_visits}
+system.time({
+  df = fst::read.fst(here::here(paste0("data/rpdrml-", conf$rpdrml_version, "/diagnoses.fst")),
+                     as.data.table = TRUE)
+  
+  visits = fst::read.fst(here::here(paste0("data/rpdrml-", conf$rpdrml_version, "/visits.fst")),
+                   as.data.table = TRUE)
+})
+```
+
+
+
+
+```{r}
+# Review column names
+names(df)
+names(visits)
+```
+
+
+```{r merging_dx_visits}
+# Join visits and diagnoses; left join relative to visits
+# Time: 4 mins (awing)
+system.time({
+  dx_visits = merge(visits, df %>% select(-c(empi, subject_num)), by = "encounter_num", all.x = TRUE)
+})
+
+dim(dx_visits)
+names(dx_visits)
+
+rm(df, visits)
+gc()
+
+```
+
+# Save dx visits
+
+```{r save_dx_visits}
+# save file as fst
+system.time({
+  fst::write.fst(dx_visits,
+                 here::here(paste0("data/rpdrml-", conf$rpdrml_version, "/diagnoses-visits.fst")))
+})
+
+```
+
+
+
+```{r}
+# clean up
+
+rm(dx_visits)
+gc()
+```
+

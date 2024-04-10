@@ -1,12 +1,40 @@
 # mixture_models_covidmh-rf1-2d
 
+This project aims to investigate the combined effects of multiple pandemic-related policy exposures on mental health outcomes using mixture modeling techniques. **The main objectives are:**
+
+    To estimate the joint effects of COVID-19 policy exposures on depression and anxiety outcomes.
+    To identify which components of the containment policies had the greatest impact on mental health outcomes.
+    To compare and contrast different mixture modeling approaches, including quantile g-computation, targeted learning mixture analysis, and          
+    cross-validated targeted maximum likelihood estimation.
+
+Mixture modeling is particularly relevant to this project as it allows for the analysis of multiple exposures that are simultaneously intervened upon, better capturing real-world scenarios where correlated exposure variables generate combined health impacts. This approach will help uncover the cumulative effects of policy exposures on mental health outcomes, even when individual policies may have small effects when evaluated independently.
+
+_Key research questions include:_
+
+    What is the combined effect of multiple pandemic-related policy exposures on the incidence of depression and anxiety?
+    Which specific policy exposures, or combinations of exposures, have the greatest impact on mental health outcomes?
+    How do different mixture modeling techniques compare in terms of their ability to estimate the joint effects of policy exposures on mental health outcomes?
 
 
-## Getting started
+**Data**
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+The primary cohort for this analysis is the All of Us Research Program, with secondary cohorts including the MGB Biobank, UK Biobank, and ELSA Brasil. The data structure includes:
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+    Outcomes: Incident depression and anxiety diagnoses based on ICD-10 codes.
+    Exposures: Policy exposures from the Oxford COVID-19 Government Response Tracker (OxCGRT), including school closings, workplace closings, travel restrictions, and others.
+    Covariates: Individual-level covariates such as age, sex, race, ethnicity, socioeconomic status, and pre-existing mental health conditions, as well as location-level covariates.
+
+The exposure window for this analysis is proposed to be 5 months (for the _minimum viable product_ analysis so that we can examine the effect of our exposure on a continuous outcome _(anxiety and depression severity, measured using GAD-7 and PHQ-9)_, with the outcome window following the exposure window. To handle the longitudinal nature of the policy exposures, we plan to:
+
+    Binarize each policy exposure into "low" and "high" categories.
+    Calculate a "time at high" variable that counts the number of days each policy was in the high category during the exposure window.
+    Explore potential strategies for reducing the longitudinal nature of the exposures, such as binning, or taking the mean over the 
+    exposure window.
+
+By transforming the longitudinal exposures into continuous variables, we can then apply mixture modeling techniques to estimate the joint effects of these exposures on mental health outcomes.
+
+
+
 
 ## Add your files
 
@@ -44,22 +72,6 @@ Use the built-in continuous integration in GitLab.
 
 ***
 
-# Editing this README
-
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
-
-## Suggestions for a good README
-
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
-
-## Name
-Choose a self-explaining name for your project.
-
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
-
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
 
 ## Visuals
 Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.

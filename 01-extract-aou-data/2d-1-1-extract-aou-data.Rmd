@@ -1,0 +1,582 @@
+---
+title: "Extract AoU Data"
+author: "Pratik Nitin Khadse, Zoey Zhou"
+date: "2025-05-11"
+output:
+  html_document:
+    toc: yes
+    toc_depth: 3
+    toc_float: yes
+---
+
+**R markdown version of 2d_0_0_data_processing**
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# Run reticulate before proceeding
+library(reticulate)
+```
+
+
+```{r}
+# Install packages using py_install, ensure pip = TRUE
+py_install("seaborn", pip = TRUE)
+```
+
+
+
+
+# Libraries
+
+
+```{python}
+import pandas as pd
+import numpy as np
+import seaborn as sns
+from datetime import datetime
+import time
+from pandas import Timestamp
+import warnings
+warnings.filterwarnings("ignore")
+```
+
+```{python}
+import pandas
+import os
+
+# This query represents dataset "basic_cope" for domain "person" and was generated for All of Us Registered Tier Dataset v7
+dataset_67240677_person_sql = """
+    SELECT
+        person.person_id,
+        p_gender_concept.concept_name as gender,
+        person.birth_datetime as date_of_birth,
+        p_race_concept.concept_name as race,
+        p_sex_at_birth_concept.concept_name as sex_at_birth 
+    FROM
+        `""" + os.environ["WORKSPACE_CDR"] + """.person` person 
+    LEFT JOIN
+        `""" + os.environ["WORKSPACE_CDR"] + """.concept` p_gender_concept 
+            ON person.gender_concept_id = p_gender_concept.concept_id 
+    LEFT JOIN
+        `""" + os.environ["WORKSPACE_CDR"] + """.concept` p_race_concept 
+            ON person.race_concept_id = p_race_concept.concept_id 
+    LEFT JOIN
+        `""" + os.environ["WORKSPACE_CDR"] + """.concept` p_sex_at_birth_concept 
+            ON person.sex_at_birth_concept_id = p_sex_at_birth_concept.concept_id  
+    WHERE
+        person.PERSON_ID IN (
+            SELECT
+                distinct person_id  
+            FROM
+                `""" + os.environ["WORKSPACE_CDR"] + """.cb_search_person` cb_search_person  
+            WHERE
+                cb_search_person.person_id IN (
+                    SELECT
+                        criteria.person_id 
+                    FROM
+                        (SELECT
+                            DISTINCT person_id,
+                            entry_date,
+                            concept_id 
+                        FROM
+                            `""" + os.environ["WORKSPACE_CDR"] + """.cb_search_all_events` 
+                        WHERE
+                            (
+                                concept_id IN(
+                                    SELECT
+                                        DISTINCT c.concept_id 
+                                    FROM
+                                        `""" + os.environ["WORKSPACE_CDR"] + """.cb_criteria` c 
+                                    JOIN
+                                        (
+                                            SELECT
+                                                CAST(cr.id as string) AS id       
+                                            FROM
+                                                `""" + os.environ["WORKSPACE_CDR"] + """.cb_criteria` cr       
+                                            WHERE
+                                                concept_id IN (1586134, 1333342)       
+                                                AND full_text LIKE '%_rank1]%'      
+                                        ) a 
+                                            ON (
+                                                c.path LIKE CONCAT('%.',
+                                            a.id,
+                                            '.%') 
+                                            OR c.path LIKE CONCAT('%.',
+                                            a.id) 
+                                            OR c.path LIKE CONCAT(a.id,
+                                            '.%') 
+                                            OR c.path = a.id) 
+                                        WHERE
+                                            is_standard = 0 
+                                            AND is_selectable = 1
+                                        ) 
+                                        AND is_standard = 0 
+                                )
+                            ) criteria 
+                        ) )"""
+
+dataset_67240677_person_df = pandas.read_gbq(
+    dataset_67240677_person_sql,
+    dialect="standard",
+    use_bqstorage_api=("BIGQUERY_STORAGE_API_ENABLED" in os.environ),
+    progress_bar_type="tqdm_notebook")
+
+dataset_67240677_person_df.head(5)
+```
+
+
+```{python}
+import pandas
+import os
+
+# This query represents dataset "individual_ses" for domain "survey" and was generated for All of Us Registered Tier Dataset v7
+dataset_53831970_survey_sql = """
+    SELECT
+        answer.person_id,
+        answer.survey_datetime,
+        answer.question,
+        answer.answer,
+        answer.survey_version_name  
+    FROM
+        `""" + os.environ["WORKSPACE_CDR"] + """.ds_survey` answer   
+    WHERE
+        (
+            question_concept_id IN (
+                1585370, 1585375, 1585386, 1585389, 1585892, 1585940, 1585952
+            )
+        )  
+        AND (
+            answer.PERSON_ID IN (
+                SELECT
+                    distinct person_id  
+                FROM
+                    `""" + os.environ["WORKSPACE_CDR"] + """.cb_search_person` cb_search_person  
+                WHERE
+                    cb_search_person.person_id IN (
+                        SELECT
+                            criteria.person_id 
+                        FROM
+                            (SELECT
+                                DISTINCT person_id,
+                                entry_date,
+                                concept_id 
+                            FROM
+                                `""" + os.environ["WORKSPACE_CDR"] + """.cb_search_all_events` 
+                            WHERE
+                                (
+                                    concept_id IN (
+                                        SELECT
+                                            DISTINCT c.concept_id 
+                                        FROM
+                                            `""" + os.environ["WORKSPACE_CDR"] + """.cb_criteria` c 
+                                        JOIN
+                                            (
+                                                select
+                                                    cast(cr.id as string) as id 
+                                                FROM
+                                                    `""" + os.environ["WORKSPACE_CDR"] + """.cb_criteria` cr 
+                                                WHERE
+                                                    concept_id IN (1586134, 1333342) 
+                                                    AND full_text LIKE '%_rank1]%'
+                                            ) a 
+                                                ON (
+                                                    c.path LIKE CONCAT('%.',
+                                                a.id,
+                                                '.%') 
+                                                OR c.path LIKE CONCAT('%.',
+                                                a.id) 
+                                                OR c.path LIKE CONCAT(a.id,
+                                                '.%') 
+                                                OR c.path = a.id) 
+                                            WHERE
+                                                is_standard = 0 
+                                                AND is_selectable = 1
+                                            ) 
+                                            AND is_standard = 0 
+                                    )
+                                ) criteria 
+                            ) ))"""
+
+dataset_53831970_survey_df = pandas.read_gbq(
+    dataset_53831970_survey_sql,
+    dialect="standard",
+    use_bqstorage_api=("BIGQUERY_STORAGE_API_ENABLED" in os.environ),
+    progress_bar_type="tqdm_notebook")
+
+dataset_53831970_survey_df.head(5)
+```
+
+
+```{python}
+import pandas
+import os
+
+# This query represents dataset "basic_cope" for domain "survey" and was generated for All of Us Registered Tier Dataset v7
+dataset_00067982_survey_sql = """
+    SELECT
+        answer.person_id,
+        answer.survey_datetime,
+        answer.question,
+        answer.answer,
+        answer.survey_version_name  
+    FROM
+        `""" + os.environ["WORKSPACE_CDR"] + """.ds_survey` answer   
+    WHERE
+        (
+            question_concept_id IN (
+                SELECT
+                    DISTINCT concept_id 
+                FROM
+                    `""" + os.environ["WORKSPACE_CDR"] + """.cb_criteria` c 
+                JOIN
+                    (
+                        select
+                            cast(cr.id as string) as id 
+                        FROM
+                            `""" + os.environ["WORKSPACE_CDR"] + """.cb_criteria` cr 
+                        WHERE
+                            concept_id IN (
+                                1333342
+                            ) 
+                            AND domain_id = 'SURVEY'
+                    ) a 
+                        ON (
+                            c.path like CONCAT('%',
+                        a.id,
+                        '.%')) 
+                    WHERE
+                        domain_id = 'SURVEY' 
+                        AND type = 'PPI' 
+                        AND subtype = 'QUESTION'
+                    )
+            )  
+            AND (
+                answer.PERSON_ID IN (
+                    SELECT
+                        distinct person_id  
+                    FROM
+                        `""" + os.environ["WORKSPACE_CDR"] + """.cb_search_person` cb_search_person  
+                    WHERE
+                        cb_search_person.person_id IN (
+                            SELECT
+                                criteria.person_id 
+                            FROM
+                                (SELECT
+                                    DISTINCT person_id,
+                                    entry_date,
+                                    concept_id 
+                                FROM
+                                    `""" + os.environ["WORKSPACE_CDR"] + """.cb_search_all_events` 
+                                WHERE
+                                    (
+                                        concept_id IN (
+                                            SELECT
+                                                DISTINCT c.concept_id 
+                                            FROM
+                                                `""" + os.environ["WORKSPACE_CDR"] + """.cb_criteria` c 
+                                            JOIN
+                                                (
+                                                    select
+                                                        cast(cr.id as string) as id 
+                                                    FROM
+                                                        `""" + os.environ["WORKSPACE_CDR"] + """.cb_criteria` cr 
+                                                    WHERE
+                                                        concept_id IN (1586134, 1333342) 
+                                                        AND full_text LIKE '%_rank1]%'
+                                                ) a 
+                                                    ON (
+                                                        c.path LIKE CONCAT('%.',
+                                                    a.id,
+                                                    '.%') 
+                                                    OR c.path LIKE CONCAT('%.',
+                                                    a.id) 
+                                                    OR c.path LIKE CONCAT(a.id,
+                                                    '.%') 
+                                                    OR c.path = a.id) 
+                                                WHERE
+                                                    is_standard = 0 
+                                                    AND is_selectable = 1
+                                                ) 
+                                                AND is_standard = 0 
+                                        )
+                                    ) criteria 
+                                ) ))"""
+
+dataset_00067982_survey_df = pandas.read_gbq(
+    dataset_00067982_survey_sql,
+    dialect="standard",
+    use_bqstorage_api=("BIGQUERY_STORAGE_API_ENABLED" in os.environ),
+    progress_bar_type="tqdm_notebook")
+
+dataset_00067982_survey_df.head(5)
+```
+
+# COPE
+
+```{python}
+cope = dataset_00067982_survey_df
+cope_pt_id = cope['person_id'].tolist()
+
+def cope_stats(cope_date):
+    print('Number of participants in the wave: ', cope_date['person_id'].nunique())
+
+cope_072020 = cope[cope['survey_version_name']=='July 2020 COPE Survey']
+cope_072020.to_csv('2d_cope_072020.csv', index=False)
+cope_stats(cope_072020)
+```
+
+
+# Export
+
+## Local export
+```{python}
+cope_052020 = cope[cope['survey_version_name']=='May 2020 COPE Survey']
+cope_052020.to_csv('2d_cope_052020.csv', index=False)
+
+cope_062020 = cope[cope['survey_version_name']=='June 2020 COPE Survey']
+cope_062020.to_csv('2d_cope_062020.csv', index=False)
+```
+
+# Demo
+
+```{python}
+demo = dataset_67240677_person_df
+demo = demo[demo['person_id'].isin(cope_pt_id)]
+```
+
+```{python}
+def sex(x):
+    if x=='No matching concept':
+        x='No_matching_concept'
+    elif x=='Not male, not female, prefer not to answer, or skipped':
+        x=pd.NA
+    return x
+
+def gender(x):
+    if x!='Famale' and x!='Male':
+        x='Others'
+    return x
+
+def race(x):
+    if x=='White' or x=='Black or African American' or x=='Asian':
+        pass
+    elif x=='PMI: Skip' or x=='I prefer not to answer':
+        x=pd.NA
+    else:
+        x='Others'
+    return x
+```
+
+
+```{python}
+## Filter: 
+demo['gender'] = demo['gender'].apply(lambda x: gender(x))
+demo['race'] =demo['race'].apply(lambda x: race(x))
+demo['sex_at_birth'] = demo['sex_at_birth'].apply(lambda x: sex(x))
+
+### Age at 2020-05-31
+demo['age_2020'] = Timestamp('2020-05-31 06:00:00+0000', tz='UTC') - demo['date_of_birth'] ## change to May 01
+demo['age_2020'] = demo['age_2020']/ np.timedelta64(1, 'Y')
+demo['age_2020'] = demo['age_2020'].round(2)
+```
+
+
+```{python}
+### Bin1
+bins = [0, 24, 44, 64, 90]  # Define your bin edges here
+
+# Create categorical variable based on bins
+demo['age_bin'] = pd.cut(demo['age_2020'], bins)
+
+# Convert categorical variable into dummy variables (binary)
+dummy_variables = pd.get_dummies(demo['age_bin'], prefix='bin1')
+dummy_variables = dummy_variables.astype(int)
+# Concatenate dummy variables with the original DataFrame
+demo = pd.concat([demo, dummy_variables], axis=1)
+
+
+### Bin2
+bins = [0, 44, 64, 90]  # Define your bin edges here
+
+# Create categorical variable based on bins
+demo['age_bin'] = pd.cut(demo['age_2020'], bins)
+
+# Convert categorical variable into dummy variables (binary)
+dummy_variables = pd.get_dummies(demo['age_bin'], prefix='bin2')
+dummy_variables = dummy_variables.astype(int)
+# Concatenate dummy variables with the original DataFrame
+demo = pd.concat([demo, dummy_variables], axis=1)
+demo
+```
+
+
+# Export
+
+## Local export
+
+```{python}
+demo.to_csv('2d_demo.csv', index=False)
+```
+
+
+# SES
+
+```{python}
+idv_survey = dataset_53831970_survey_df
+idv_survey = idv_survey.drop(columns=['survey_version_name'])
+idv_survey = idv_survey[idv_survey['answer']!='PMI: Skip']
+idv_survey = idv_survey[idv_survey['person_id'].isin(cope_pt_id)]
+```
+
+
+```{python}
+## Only keep the most recent survey answer
+idv_survey = idv_survey.loc[idv_survey.groupby(['person_id', 'question']).survey_datetime.idxmax()]
+idv_survey = idv_survey.drop(columns=['survey_datetime'])
+idv_survey = idv_survey.pivot(index='person_id', columns='question', values='answer')
+idv_survey_ = idv_survey.reset_index()
+idv_survey_ = idv_survey_.rename(columns=\
+                             {'Insurance: Health Insurance':'has_health_insurance','Home Own: Current Home Own':'home_ownership','Education Level: Highest Grade':'highest_year_of_school','Income: Annual Income':'household_income','Employment: Employment Status':'employment_status','Marital Status: Current Marital Status':'maritial_status','':'age_at_landmark'})
+idv_survey_['highest_year_of_school'] = idv_survey_['highest_year_of_school'].str.replace('Highest Grade: ', '')
+idv_survey_['employment_status'] = idv_survey_['employment_status'].str.replace('Employment Status: ', '')
+idv_survey_['home_ownership'] = idv_survey_['home_ownership'].str.replace('Current Home Own: ', '')
+idv_survey_['household_income'] = idv_survey_['household_income'].str.replace('Annual Income: ', '')
+idv_survey_['has_health_insurance'] = idv_survey_['has_health_insurance'].str.replace('Health Insurance: ', '')
+idv_survey_['maritial_status'] = idv_survey_['maritial_status'].str.replace('Current Marital Status: ', '')
+idv_survey_
+```
+
+
+```{python}
+def income(x):
+    if x=='100k 150k':
+        x=125000
+    elif x=='50k 75k':
+        x=62500
+    elif x=='75k 100k':
+        x=87500
+    elif x=='more 200k':
+        x=250000
+    elif x=='35k 50k':
+        x=47500
+    elif x=='10k 25k':
+        x=12500
+    elif x=='150k 200k':
+        x=175000
+    elif x=='PMI: Prefer Not To Answer':
+        x=pd.NA
+    elif x=='25k 35k':
+        x=30000
+    elif x=='less 10k':
+        x=5000
+    return x
+```
+
+
+```{python}
+idv_survey_['household_income'] = idv_survey_['household_income'].apply(lambda x: income(x))
+idv_survey_['household_income'].value_counts()
+value_counts_income = idv_survey_['household_income'].value_counts().reset_index()
+value_counts_income_ = idv_survey_['household_income'].value_counts(normalize = True).reset_index()
+value_counts_income = value_counts_income.sort_values(by='household_income')
+value_counts_income = value_counts_income.merge(value_counts_income_, on='household_income', how='left')
+value_counts_income
+```
+
+
+```{python}
+def income_reverse(x):
+    try:
+        if x <= 47500:
+            x='<50k'
+        elif 62500 <=x <= 87500:
+            x='50k-100k'
+        elif x>= 125000:
+            x='>100k'
+    except:
+        pass
+    return x
+
+idv_survey_['household_income_cat'] = idv_survey_['household_income'].apply(lambda x: income_reverse(x))
+
+# idv_survey_['has_health_insurance'].value_counts()
+## NA: [PMI: Prefer Not To Answer, PMI: Dont Know]
+
+def insurance(x):
+    if x=='PMI: Prefer Not To Answer' or x=='PMI: Dont Know':
+        x =pd.NA
+    return x
+
+idv_survey_['has_health_insurance'] = idv_survey_['has_health_insurance'].apply(lambda x: insurance(x))
+
+# idv_survey_['home_ownership'].value_counts()
+def home(x):
+    if x=='Other Arrangement':
+        x='Others'
+    elif x=='PMI: Prefer Not To Answer':
+        x=pd.NA
+    return x
+idv_survey_['home_ownership'] = idv_survey_['home_ownership'].apply(lambda x:home(x))
+
+
+# idv_survey_['employment_status'].value_counts()
+def employ(x):
+    if x=='Employed For Wages' or x=='Self Employed' or x=='Homemaker':
+        x=1
+    elif x=='Retired' or x=='Unable To Work' or x=='Student' or x=='Out Of Work Less Than One' or x=='Out Of Work One Or More':
+        x=0
+    else:
+        x=pd.NA
+    return x
+
+idv_survey_['have_job'] = idv_survey_['employment_status'].apply(lambda x:employ(x))
+
+# idv_survey_['highest_year_of_school'].value_counts()
+# [NA, College graduated, not college graduated]
+def edu(x):
+    if x =='College graduate or advanced degree':
+        x=1
+    elif x=='PMI: Prefer Not To Answer':
+        x=pd.NA
+    else:
+        x=0
+    return x
+idv_survey_['college_graduated'] = idv_survey_['highest_year_of_school'].apply(lambda x:edu(x))
+
+#idv_survey_['maritial_status'].value_counts()
+## [Marriedn or Partnered] [Not with someone][NA]
+
+def marrried_live_with_someone(x):
+    if x=='Married' or x=='Living With Partner':
+        x=1
+    elif x=='PMI: Prefer Not To Answer':
+        x=pd.NA
+    else:
+        x=0
+    return x
+
+idv_survey_['married_or_with_sb'] = idv_survey_['maritial_status'].apply(lambda x:marrried_live_with_someone(x))
+idv_survey_.columns
+```
+
+```{python}
+idv_survey_ = idv_survey_[['person_id', 'home_ownership','household_income', 'has_health_insurance', \
+                           'household_income_cat', 'have_job', 'college_graduated','married_or_with_sb']]
+```
+
+```{python}
+idv_survey_.info()
+```
+
+# Export
+
+## Local export
+```{python}
+idv_survey_.to_csv('2c_idv_survey_.csv', index=False)
+
+```
+

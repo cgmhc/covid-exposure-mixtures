@@ -1,0 +1,754 @@
+---
+title: "Integrate comorbidities with basics data"
+author: "Devon Watts, Pratik Nitin Khadse"
+date: "2025-05-11"
+output:
+  html_document:
+    toc: yes
+    toc_depth: 3
+    toc_float: yes
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load packages
+```{r}
+# Install specific versions
+install.packages("data.table")  # Will install latest version (1.16.4)
+install.packages("rlang")       # Will install latest version (1.1.4)
+
+# Load these packages first
+library(data.table)
+library(rlang)
+packageVersion("data.table")
+packageVersion("rlang")
+
+
+# Function to install and load packages 
+package_install = function(package_list) {
+  for (pkg in package_list) {
+    if (!requireNamespace(pkg, quietly = TRUE)) {
+      tryCatch({
+        install.packages(pkg)
+      }, error = function(e) {
+        message(paste0("Could not install ", pkg, ": ", e))
+      })
+    }
+    # Load the library
+    library(pkg, character.only = TRUE)
+  }
+}
+
+# List of packages
+packages = c('tidyverse', 'bigrquery', 'haven', 'qgcomp', 'dplyr', 'ggplot2', 'moments', 
+             'naniar', 'VIM', 'missForest', 'tidymodels', 'purrr', 'gridExtra', 
+             'knitr', 'infotheo', 'igraph', 'ggraph', 'lubridate', 'zoo', 
+             'ggridges', 'slider', 'stats', 'reshape2', 'broom', 'gridExtra',
+             'modelsummary', 'sandwich', 'igraph', 'ggraph', 
+             'arrow', 'VennDiagram')
+
+# Call the package_install function 
+package_install(packages)
+```
+
+# Extract dataset from AoU
+
+```{r}
+# This query represents dataset "basics_w_datetime" for domain "survey" and was generated for All of Us Controlled Tier Dataset v7
+dataset_09554080_survey_sql <- paste("
+    SELECT
+        answer.person_id,
+        answer.survey_datetime,
+        answer.question,
+        answer.answer  
+    FROM
+        `ds_survey` answer   
+    WHERE
+        (
+            question_concept_id IN (SELECT
+                DISTINCT concept_id                         
+            FROM
+                `cb_criteria` c                         
+            JOIN
+                (SELECT
+                    CAST(cr.id as string) AS id                               
+                FROM
+                    `cb_criteria` cr                               
+                WHERE
+                    concept_id IN (1586134)                               
+                    AND domain_id = 'SURVEY') a 
+                    ON (c.path like CONCAT('%', a.id, '.%'))                         
+            WHERE
+                domain_id = 'SURVEY'                         
+                AND type = 'PPI'                         
+                AND subtype = 'QUESTION')
+        )", sep="")
+
+# Formulate a Cloud Storage destination path for the data exported from BigQuery.
+# NOTE: By default data exported multiple times on the same day will overwrite older copies.
+#       But data exported on a different days will write to a new location so that historical
+#       copies can be kept as the dataset definition is changed.
+survey_09554080_path <- file.path(
+  Sys.getenv("WORKSPACE_BUCKET"),
+  "bq_exports",
+  Sys.getenv("OWNER_EMAIL"),
+  strftime(lubridate::now(), "%Y%m%d"),  # Comment out this line if you want the export to always overwrite.
+  "survey_09554080",
+  "survey_09554080_*.csv")
+message(str_glue('The data will be written to {survey_09554080_path}. Use this path when reading ',
+                 'the data into your notebooks in the future.'))
+
+# Perform the query and export the dataset to Cloud Storage as CSV files.
+# NOTE: You only need to run `bq_table_save` once. After that, you can
+#       just read data from the CSVs in Cloud Storage.
+bq_table_save(
+  bq_dataset_query(Sys.getenv("WORKSPACE_CDR"), dataset_09554080_survey_sql, billing = Sys.getenv("GOOGLE_PROJECT")),
+  survey_09554080_path,
+  destination_format = "CSV")
+```
+
+
+```{r}
+# Read the data directly from Cloud Storage into memory.
+# NOTE: Alternatively you can `gsutil -m cp {survey_09554080_path}` to copy these files
+#       to the Jupyter disk.
+read_bq_export_from_workspace_bucket <- function(export_path) {
+  col_types <- cols(survey = col_character(), question = col_character(), answer = col_character())
+  bind_rows(
+    map(system2('gsutil', args = c('ls', export_path), stdout = TRUE, stderr = TRUE),
+        function(csv) {
+          message(str_glue('Loading {csv}.'))
+          chunk <- read_csv(pipe(str_glue('gsutil cat {csv}')), col_types = col_types, show_col_types = FALSE)
+          if (is.null(col_types)) {
+            col_types <- spec(chunk)
+          }
+          chunk
+        }))
+}
+dataset_09554080_survey_df <- read_bq_export_from_workspace_bucket(survey_09554080_path)
+
+dim(dataset_09554080_survey_df)
+
+head(dataset_09554080_survey_df, 5)
+```
+
+
+```{r}
+# This snippet assumes that you run setup first
+
+# This code saves your dataframe into a csv file in a "data" folder in Google Bucket
+
+# Replace df with THE NAME OF YOUR DATAFRAME
+my_dataframe <- dataset_09554080_survey_df
+
+# Replace 'test.csv' with THE NAME of the file you're going to store in the bucket (don't delete the quotation marks)
+destination_filename <- 'basic.csv'
+
+########################################################################
+##
+################# DON'T CHANGE FROM HERE ###############################
+##
+########################################################################
+
+# store the dataframe in current workspace
+write_excel_csv(my_dataframe, destination_filename)
+
+# Get the bucket name
+my_bucket <- Sys.getenv('WORKSPACE_BUCKET')
+
+# Copy the file from current workspace to the bucket
+system(paste0("gsutil cp ./", destination_filename, " ", my_bucket, "/data/"), intern=T)
+
+# Check if file is in the bucket
+system(paste0("gsutil ls ", my_bucket, "/data/*.csv"), intern=T)
+```
+
+# Extract conditions data from AoU
+
+```{r}
+# This query represents dataset "2d_conditions" for domain "condition" and was generated for All of Us Controlled Tier Dataset v7
+dataset_93048579_condition_sql <- paste("
+    SELECT
+        c_occurrence.person_id,
+        c_standard_concept.concept_name as standard_concept_name,
+        c_standard_concept.concept_code as standard_concept_code,
+        c_standard_concept.vocabulary_id as standard_vocabulary,
+        c_occurrence.condition_start_datetime,
+        c_occurrence.condition_end_datetime,
+        c_occurrence.condition_source_value,
+        c_source_concept.concept_name as source_concept_name,
+        c_source_concept.vocabulary_id as source_vocabulary 
+    FROM
+        ( SELECT
+            * 
+        FROM
+            `condition_occurrence` c_occurrence 
+        WHERE
+            (
+                condition_concept_id IN (SELECT
+                    DISTINCT c.concept_id 
+                FROM
+                    `cb_criteria` c 
+                JOIN
+                    (SELECT
+                        CAST(cr.id as string) AS id       
+                    FROM
+                        `cb_criteria` cr       
+                    WHERE
+                        concept_id IN (4274025)       
+                        AND full_text LIKE '%_rank1]%'      ) a 
+                        ON (c.path LIKE CONCAT('%.', a.id, '.%') 
+                        OR c.path LIKE CONCAT('%.', a.id) 
+                        OR c.path LIKE CONCAT(a.id, '.%') 
+                        OR c.path = a.id) 
+                WHERE
+                    is_standard = 1 
+                    AND is_selectable = 1)
+            )) c_occurrence 
+    LEFT JOIN
+        `concept` c_standard_concept 
+            ON c_occurrence.condition_concept_id = c_standard_concept.concept_id 
+    LEFT JOIN
+        `concept` c_source_concept 
+            ON c_occurrence.condition_source_concept_id = c_source_concept.concept_id", sep="")
+
+# Formulate a Cloud Storage destination path for the data exported from BigQuery.
+# NOTE: By default data exported multiple times on the same day will overwrite older copies.
+#       But data exported on a different days will write to a new location so that historical
+#       copies can be kept as the dataset definition is changed.
+condition_93048579_path <- file.path(
+  Sys.getenv("WORKSPACE_BUCKET"),
+  "bq_exports",
+  Sys.getenv("OWNER_EMAIL"),
+  strftime(lubridate::now(), "%Y%m%d"),  # Comment out this line if you want the export to always overwrite.
+  "condition_93048579",
+  "condition_93048579_*.csv")
+message(str_glue('The data will be written to {condition_93048579_path}. Use this path when reading ',
+                 'the data into your notebooks in the future.'))
+
+# Perform the query and export the dataset to Cloud Storage as CSV files.
+# NOTE: You only need to run `bq_table_save` once. After that, you can
+#       just read data from the CSVs in Cloud Storage.
+bq_table_save(
+  bq_dataset_query(Sys.getenv("WORKSPACE_CDR"), dataset_93048579_condition_sql, billing = Sys.getenv("GOOGLE_PROJECT")),
+  condition_93048579_path,
+  destination_format = "CSV")
+
+```
+
+
+```{r}
+# Read the data directly from Cloud Storage into memory.
+# NOTE: Alternatively you can `gsutil -m cp {condition_93048579_path}` to copy these files
+#       to the Jupyter disk.
+read_bq_export_from_workspace_bucket <- function(export_path) {
+  col_types <- cols(standard_concept_name = col_character(), standard_concept_code = col_character(), standard_vocabulary = col_character(), condition_source_value = col_character(), source_concept_name = col_character(), source_vocabulary = col_character())
+  bind_rows(
+    map(system2('gsutil', args = c('ls', export_path), stdout = TRUE, stderr = TRUE),
+        function(csv) {
+          message(str_glue('Loading {csv}.'))
+          chunk <- read_csv(pipe(str_glue('gsutil cat {csv}')), col_types = col_types, show_col_types = FALSE)
+          if (is.null(col_types)) {
+            col_types <- spec(chunk)
+          }
+          chunk
+        }))
+}
+dataset_93048579_condition_df <- read_bq_export_from_workspace_bucket(condition_93048579_path)
+
+dim(dataset_93048579_condition_df)
+
+head(dataset_93048579_condition_df, 5)
+```
+
+
+```{r}
+# This snippet assumes that you run setup first
+
+# This code saves your dataframe into a csv file in a "data" folder in Google Bucket
+
+# Replace df with THE NAME OF YOUR DATAFRAME
+my_dataframe <- dataset_93048579_condition_df
+
+# Replace 'test.csv' with THE NAME of the file you're going to store in the bucket (don't delete the quotation marks)
+destination_filename <- 'conditions.csv'
+
+########################################################################
+##
+################# DON'T CHANGE FROM HERE ###############################
+##
+########################################################################
+
+# store the dataframe in current workspace
+write_excel_csv(my_dataframe, destination_filename)
+
+# Get the bucket name
+my_bucket <- Sys.getenv('WORKSPACE_BUCKET')
+
+# Copy the file from current workspace to the bucket
+system(paste0("gsutil cp ./", destination_filename, " ", my_bucket, "/data/"), intern=T)
+
+# Check if file is in the bucket
+system(paste0("gsutil ls ", my_bucket, "/data/*.csv"), intern=T)
+```
+
+# Load data
+```{r}
+# Basic Survey Data
+# This snippet assumes that you run setup first
+
+# This code copies a file from your Google Bucket into a dataframe
+
+# replace 'test.csv' with the name of the file in your google bucket (don't delete the quotation marks)
+name_of_file_in_bucket <- 'basic.csv'
+
+########################################################################
+##
+################# DON'T CHANGE FROM HERE ###############################
+##
+########################################################################
+
+# Get the bucket name
+my_bucket <- Sys.getenv('WORKSPACE_BUCKET')
+
+# Copy the file from current workspace to the bucket
+system(paste0("gsutil cp ", my_bucket, "/data/", name_of_file_in_bucket, " ."), intern=T)
+
+# Load the file into a dataframe
+df_basic  <- read_csv(name_of_file_in_bucket)
+head(df_basic)
+```
+
+```{r}
+# Conditions Data
+# This snippet assumes that you run setup first
+
+# This code copies a file from your Google Bucket into a dataframe
+
+# replace 'test.csv' with the name of the file in your google bucket (don't delete the quotation marks)
+name_of_file_in_bucket <- 'conditions.csv'
+
+########################################################################
+##
+################# DON'T CHANGE FROM HERE ###############################
+##
+########################################################################
+
+# Get the bucket name
+my_bucket <- Sys.getenv('WORKSPACE_BUCKET')
+
+# Copy the file from current workspace to the bucket
+system(paste0("gsutil cp ", my_bucket, "/data/", name_of_file_in_bucket, " ."), intern=T)
+
+# Load the file into a dataframe
+df_con  <- read_csv(name_of_file_in_bucket)
+head(df_con)
+```
+
+
+```{r}
+# GAD Data
+# This snippet assumes that you run setup first
+
+# This code copies a file from your Google Bucket into a dataframe
+
+# replace 'test.csv' with the name of the file in your google bucket (don't delete the quotation marks)
+name_of_file_in_bucket <- 'mvp_2d_0725.csv'
+
+########################################################################
+##
+################# DON'T CHANGE FROM HERE ###############################
+##
+########################################################################
+
+# Get the bucket name
+my_bucket <- Sys.getenv('WORKSPACE_BUCKET')
+
+# Copy the file from current workspace to the bucket
+system(paste0("gsutil cp ", my_bucket, "/data/", name_of_file_in_bucket, " ."), intern=T)
+
+# Load the file into a dataframe
+df  <- read_csv(name_of_file_in_bucket)
+head(df)
+```
+
+# Convert basics to wide
+
+## Filter
+
+```{r}
+# Questions to include
+
+basic_question_include <- c("Race: What Race Ethnicity",
+                "Biological Sex At Birth: Sex At Birth",
+                "Education Level: Highest Grade",
+                "Marital Status: Current Marital Status",
+                "Health Insurance: Health Insurance Type",
+                "Employment: Employment Status",
+                "Income: Annual Income",
+                "Home Own: Current Home Own",
+                "Living Situation: Stable House Concern",
+                "The Basics: Birthplace")
+```
+
+
+```{r}
+# Filter
+
+filtered_df_basic <- df_basic[df_basic$question %in% basic_question_include, ]
+# Filter by datetime
+filtered_df_basic <- filtered_df_basic %>%
+  group_by(person_id, question) %>%        # Group by id and question
+  filter(survey_datetime == min(survey_datetime)) %>%  # Filter rows with the earliest datetime
+  ungroup()
+# Check duplicates
+duplicates <- filtered_df_basic |>
+  dplyr::summarise(n = dplyr::n(), .by = c(person_id, question)) |>
+  dplyr::filter(n > 1L) |>
+dplyr::distinct(person_id)
+
+distinct_id <- filtered_df_basic |>
+dplyr::distinct(person_id)
+
+# see proportion
+(nrow(duplicates)/nrow(distinct_id))
+```
+
+
+```{r}
+# Filter the earliest datetime and remove duplicates for id, question, and answer
+filtered_df_basic <- filtered_df_basic %>%
+  group_by(person_id, question) %>%    # Group by id, question, and answer
+  arrange(survey_datetime) %>%                 # Arrange rows by datetime within each group
+  slice(1) %>%                          # Select the first row in each group
+  ungroup()
+# Sanity Check: duplicates
+duplicates <- filtered_df_basic |>
+  dplyr::summarise(n = dplyr::n(), .by = c(person_id, question)) |>
+  dplyr::filter(n > 1L) |>
+dplyr::distinct(person_id)
+
+distinct_id <- filtered_df_basic |>
+dplyr::distinct(person_id)
+
+# see proportion
+(nrow(duplicates)/nrow(distinct_id))
+```
+
+
+# Clean
+
+```{r}
+# Update question values
+filtered_df_basic <- filtered_df_basic %>%
+  mutate(
+    question = case_when(
+      question == "Race: What Race Ethnicity" ~ "Race",
+      question == "Biological Sex At Birth: Sex At Birth" ~ "Sex",
+      question == "Education Level: Highest Grade" ~ "Education",
+      question == "Marital Status: Current Marital Status" ~ "MaritalStatus",
+      question == "Health Insurance: Health Insurance Type" ~ "Insurance",
+      question == "Employment: Employment Status" ~ "Employment",
+      question == "Income: Annual Income" ~ "Income",
+      question == "Home Own: Current Home Own" ~ "Home",
+      question == "Living Situation: Stable House Concern" ~ "LivingSituation",
+        question == "The Basics: Birthplace" ~ "Birthplace",
+      TRUE ~ question # Keep other values unchanged
+    )
+  )
+#wide_df_basic <- dcast(df_basic, person_id ~ question, value.var = "answer")
+wide_df_basic <- filtered_df_basic %>% pivot_wider(
+    id_cols = person_id,               # Group by ID
+    names_from = question,      # Questions become column names
+    values_from = answer        # Answers become cell values
+  )
+
+
+# Clean answers
+wide_df_basic <- wide_df_basic %>%
+  mutate(across(-person_id, ~ sub(".*: ", "", .)))
+
+# View
+head(wide_df_basic)
+```
+
+
+# Clean Conditions data
+
+```{r}
+# Sanity check: anxiety
+
+df_con %>%
+  filter(str_detect(tolower(standard_concept_name), "anxiety")) %>%
+  group_by(standard_concept_name) %>%
+  summarise(
+    count = n()
+  ) %>%
+  mutate(
+    percentage = (count / sum(count)) * 100
+  ) %>%
+  arrange(desc(count))
+```
+
+
+
+```{r}
+# Check Anxiety with snomed code. sanity check perform
+df_con %>%
+  filter(standard_concept_code == 48694002)
+
+# Sanity check: check people overlap in Anxiety disorder and Generalized anxiety disorder
+anxiety_patients <- df_con %>%
+  filter(standard_concept_name == "Anxiety disorder") %>%
+  distinct(person_id) %>%
+  pull(person_id)
+
+gad_patients <- df_con %>%
+  filter(standard_concept_name == "Generalized anxiety disorder") %>%
+  distinct(person_id) %>%
+  pull(person_id)
+
+# Find overlaps and non-overlaps
+both_x_y <- length(intersect(anxiety_patients, gad_patients))
+only_x <- length(setdiff(anxiety_patients, gad_patients))
+only_y <- length(setdiff(gad_patients, anxiety_patients))
+
+print(paste("Anxiety patients count unique patients", length(anxiety_patients)))
+print(paste("GAD patients count unique patients", length(gad_patients)))
+
+print(paste("both anxiety and gad count unique patients", both_x_y))
+print(paste("only anxiety count unique patients", only_x))
+print(paste("only gad count unique patients", only_y))
+```
+
+
+
+```{r}
+# Define the list of conditions to filter
+conditions_to_filter <- c(
+  "Hypertensive disorder",
+  "Inflammatory and toxic neuropathy",
+  "Mood disorder",
+  "Anxiety disorder",
+    "Generalized anxiety disorder",
+  "Sleep disorder",
+  "Obesity",
+  "Asthma",
+  "Sleep apnea",
+  "Hypercholesterolemia",
+  "Bronchitis",
+  "Autoimmune disease",
+  "Congestive heart failure"
+)
+```
+
+
+
+```{r}
+# Filter the dataframe for rows where the conditions column matches the list
+filtered_con_df <- df_con %>%
+  filter(standard_concept_name %in% conditions_to_filter)
+
+# Sanity check
+condition_counts <- filtered_con_df %>%
+  count(standard_concept_name) %>%
+  arrange(desc(n))
+
+condition_counts
+```
+
+
+
+```{r}
+# Lower case conditions
+
+filtered_con_df <- filtered_con_df %>%
+  mutate(standard_concept_name = tolower(standard_concept_name),              # Convert to lowercase
+         standard_concept_name = gsub(" ", "_", standard_concept_name))
+
+# Check for conditions before covid
+cutoff_date <- as.POSIXct("2020-03-15 00:00:00", tz = "UTC")
+one_year_before_cutoff <- cutoff_date - years(1)
+
+df_processed <- filtered_con_df %>%
+  mutate(condition_start_datetime = as.POSIXct(condition_start_datetime, tz = "UTC")) %>% # Convert to datetime
+  group_by(person_id, standard_concept_name) %>%
+  summarise(
+    before_covid = any(condition_start_datetime < cutoff_date),           # Check if present before COVID lifetime
+    one_yr_before_covid = any(condition_start_datetime >= one_year_before_cutoff &
+                              condition_start_datetime < cutoff_date),    # Check if present within 1 year
+    .groups = "drop"
+  )
+
+df_binary <- df_processed %>%
+  pivot_wider(
+    names_from = standard_concept_name,
+    values_from = c(before_covid, one_yr_before_covid),
+    values_fill = list(before_covid = 0, one_yr_before_covid = 0)         # Fill missing values with 0
+  )%>% 
+    mutate(across(everything(), ~ as.numeric(.)))
+```
+
+
+```{r}
+# Fix column names
+colnames(df_binary)[-1] <- sapply(colnames(df_binary)[-1], function(col) {
+  if (grepl("^before_covid_", col)) {
+    col <- sub("^before_covid_", "", col)  # Remove the prefix
+    paste0(col, "_before_covid_lifetime")  # Add the suffix
+  } else if (grepl("^one_yr_before_covid_", col)) {
+    col <- sub("^one_yr_before_covid_", "", col)  # Remove the prefix
+    paste0(col, "_1yr_before_covid")  # Add the suffix
+  } else {
+    col  # Keep column name as is if no matching prefix
+  }
+})
+```
+
+# Sanity checks for join
+```{r}
+# Extract unique person_id values from all three dataframes
+ids_binary <- unique(df_binary$person_id)
+ids_gad <- unique(df$person_id)
+ids_basic <- unique(wide_df_basic$person_id)  # Replace df_third with the actual third dataframe
+
+# Compute intersections
+area1 <- length(ids_binary)
+area2 <- length(ids_gad)
+area3 <- length(ids_basic)
+
+n12 <- length(intersect(ids_binary, ids_gad))  # Binary ∩ GAD
+n13 <- length(intersect(ids_binary, ids_basic))  # Binary ∩ Third
+n23 <- length(intersect(ids_gad, ids_basic))  # GAD ∩ Third
+n123 <- length(Reduce(intersect, list(ids_binary, ids_gad, ids_basic)))  # Binary ∩ GAD ∩ Third
+
+# Create the Venn diagram
+venn.plot <- draw.triple.venn(
+  area1 = area1,
+  area2 = area2,
+  area3 = area3,
+  n12 = n12,
+  n13 = n13,
+  n23 = n23,
+  n123 = n123,
+  category = c("conditions_data", "gad_data", "basic_data"),
+  fill = c("skyblue", "pink", "lightgreen"),
+  alpha = 0.5,
+  cex = 1.5,
+  cat.cex = 1.5
+)
+
+# Display the plot
+grid.draw(venn.plot)
+```
+
+
+**Observations**
+
+-Basic and conditions: All conditions data ids are present in basic data
+-Basic and GAD data: 9 ids in gad_data are not present in basic data
+-GAD data and conditions: Only a small percentage of gad_data ids has conditions data present
+-Joining logic: Left join conditions to basic data. Left join gad_data to this new dataset (basic_conditions)
+
+# Merge 
+
+## Basics and Conditions
+
+```{r}
+## Sanity checks: review ids
+print(paste0("Unique IDs in conditions before join ", df_binary %>% select(person_id) %>% uniqueN()))
+print(paste0("Unique IDs in gad completion data before join ", wide_df_basic %>% select(person_id) %>% uniqueN()))
+
+## Join: left join to basic
+df_basic_conditions <- wide_df_basic %>%
+  left_join(df_binary, by = "person_id")
+
+## Sanity checks: review ids
+print(paste0("Unique IDs in basic_conditions data after join ", df_basic_conditions %>% select(person_id) %>% uniqueN()))
+```
+
+
+# GAD 
+
+```{r}
+## Sanity checks: review ids
+print(paste0("Unique IDs in basic_conditions data before join ", df_basic_conditions %>% select(person_id) %>% uniqueN()))
+print(paste0("Unique IDs in gad completion data before join ", df %>% select(person_id) %>% uniqueN()))
+
+
+## Join: left join to basic_conditions
+df_final <- df_basic_conditions %>%
+  left_join(df %>% select(person_id, gad_score_july), by = "person_id") %>% # Join on person_id
+  mutate(gad_completion = ifelse(!is.na(gad_score_july), 1, 0)) %>%        # Add gad_completion column
+  select(-gad_score_july)  
+
+## Sanity checks: review ids
+print(paste0("Unique IDs in final data after join ", df_final %>% select(person_id) %>% uniqueN()))
+```
+
+# Export
+
+```{r}
+# This snippet assumes that you run setup first
+
+# This code saves your dataframe into a csv file in a "data" folder in Google Bucket
+
+# Replace df with THE NAME OF YOUR DATAFRAME
+my_dataframe <- df_final
+
+# Replace 'test.csv' with THE NAME of the file you're going to store in the bucket (don't delete the quotation marks)
+destination_filename <- 'basic_conditions_gad_completion_final.csv'
+
+########################################################################
+##
+################# DON'T CHANGE FROM HERE ###############################
+##
+########################################################################
+
+# store the dataframe in current workspace
+write_excel_csv(my_dataframe, destination_filename)
+
+# Get the bucket name
+my_bucket <- Sys.getenv('WORKSPACE_BUCKET')
+
+# Copy the file from current workspace to the bucket
+system(paste0("gsutil cp ./", destination_filename, " ", my_bucket, "/data/"), intern=T)
+
+# Check if file is in the bucket
+system(paste0("gsutil ls ", my_bucket, "/data/*.csv"), intern=T)
+```
+
+
+```{r}
+# CONVERT TO PARQUET FILE 
+# This code saves your dataframe into a parquet file in a "data" folder in Google Bucket
+my_dataframe = df_final
+# Replace with THE NAME of the file you're going to store in the bucket (don't delete the quotation marks)
+destination_filename = 'basic_conditions_gad_completion_final.parquet'
+
+########################################################################
+##
+################# DON'T CHANGE FROM HERE ###############################
+##
+########################################################################
+# Install and load arrow if not already installed
+if (!require("arrow")) install.packages("arrow")
+library(arrow)
+
+# store the dataframe in current workspace
+write_parquet(my_dataframe, destination_filename)
+
+# Get the bucket name
+my_bucket = Sys.getenv('WORKSPACE_BUCKET')
+
+# Copy the file from current workspace to the bucket
+system(paste0("gsutil cp ./", destination_filename, " ", my_bucket, "/data/"), intern=T)
+
+# Check if file is in the bucket
+system(paste0("gsutil ls ", my_bucket, "/data/*.parquet"), intern=T)
+```
+

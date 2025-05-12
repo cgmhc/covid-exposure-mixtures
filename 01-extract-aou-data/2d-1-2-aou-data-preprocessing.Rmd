@@ -1,0 +1,606 @@
+---
+title: "AoU Data Preprocessing"
+author: "Pratik Nitin Khadse, Zoey Zhou"
+date: "2025-05-11"
+output:
+  html_document:
+    toc: yes
+    toc_depth: 3
+    toc_float: yes
+---
+
+**R markdown version of 2d_0_1_data_processing**
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# Run reticulate before proceeding
+library(reticulate)
+```
+
+
+```{r}
+# Install packages using py_install, ensure pip = TRUE
+py_install("seaborn", pip = TRUE)
+```
+
+
+# Libraries
+
+```{python}
+import pandas as pd
+import numpy as np
+import seaborn as sns
+from datetime import datetime
+import time
+from pandas import Timestamp
+import warnings
+warnings.filterwarnings("ignore")
+import os
+import subprocess
+```
+
+
+# Load data
+```{python}
+covariants = pd.read_csv('2c_idv_survey_.csv')
+demo = pd.read_csv('2d_demo.csv')
+cope_072020 = pd.read_csv('2d_cope_072020.csv')
+us_oxf = pd.read_csv('OxCGRT_USA_latest.csv')
+```
+
+
+# Covariants
+```{python}
+covariants = demo.merge(covariants, on='person_id', how='left')
+covariants.info()
+```
+
+# Outcome: GAD
+
+```{python}
+cope_072020['person_id'].nunique()
+```
+
+```{python}
+#  Generalized anxiety disorder (GAD)
+# https://pubmed.ncbi.nlm.nih.gov/16717171/
+
+gad_qs=['In the past 2 weeks, how often have you been bothered by the following problem? Feeling nervous, anxious, or on edge.',\
+       'In the past 2 weeks, how often have you been bothered by the following problem? Not being able to stop or control worrying.',\
+       'In the past 2 weeks, how often have you been bothered by the following problem? Worrying too much about different things.',\
+       'In the past 2 weeks, how often have you been bothered by the following problem? Trouble relaxing.',\
+       "In the past 2 weeks, how often have you been bothered by the following problem? Being so restless that it's hard to sit still.",\
+        'In the past 2 weeks, how often have you been bothered by the following problem? Becoming easily annoyed or irritable.',\
+       'In the past 2 weeks, how often have you been bothered by the following problem? Feeling afraid as if something awful might happen.']
+cope_072020_gad = cope_072020[cope_072020['question'].isin(gad_qs)]
+cope_072020_gad['answer'].value_counts()
+```
+
+
+```{python}
+def gad_code(x):
+    if x == 'Not at all':
+        x = 0
+    elif x == 'Several days':
+        x = 1
+    elif x == 'More than half the days':
+        x = 2
+    elif x == 'Nearly every day':
+        x = 3
+    elif x == 'PMI: Skip':
+        x = pd.NA
+    return x
+  
+cope_072020_gad['answer'] = cope_072020_gad['answer'].apply(lambda x:gad_code(x))
+```
+
+
+```{python}
+### grouby for each patient, and sum the score
+cope_072020_gad_g = cope_072020_gad[['person_id','answer']].groupby('person_id').sum().reset_index()
+cope_072020_gad_g = cope_072020_gad_g.rename(columns={'answer':'gad_score'})
+
+cope_072020_gad_count = cope_072020_gad[['person_id','answer']].groupby('person_id')['answer'].count().reset_index()
+print('Description of number of questions pt answer: ',cope_072020_gad_count['answer'].value_counts())
+cope_072020_gad_count = cope_072020_gad_count[cope_072020_gad_count['answer']>0]
+cope_072020_gad_count = cope_072020_gad_count.rename(columns={'answer':'gad_score_count'})
+cope_072020_gad_g = cope_072020_gad_count.merge(cope_072020_gad_g, how='left', on='person_id')
+cope_072020_gad_g['gad_score_avg'] = cope_072020_gad_g['gad_score'] / cope_072020_gad_g['gad_score_count']
+cope_072020_gad_g = cope_072020_gad_g[['person_id','gad_score_avg','gad_score']]
+```
+
+
+```{python}
+cope_072020_gad_g_pt_ls = cope_I072020_gad_g['person_id'].tolist()
+cope_072020_gad_g.info()
+```
+
+
+```{python}
+sns.displot(cope_072020_gad_g['gad_score'])
+```
+
+
+```{python}
+cope_072020_gad_g['gad_score'].quantile([0.25, 0.5, 0.75])
+```
+
+# Add GAD for May, June
+
+```{python}
+cope_052020 = pd.read_csv('2d_cope_052020.csv')
+cope_052020_gad = cope_052020[cope_052020['question'].isin(gad_qs)]
+cope_052020_gad['answer'] = cope_052020_gad['answer'].apply(lambda x:gad_code(x))
+
+### grouby for each patient, and sum the score
+cope_052020_gad_g = cope_052020_gad[['person_id','answer']].groupby('person_id').sum().reset_index()
+cope_052020_gad_g = cope_052020_gad_g.rename(columns={'answer':'gad_score_may'})
+
+cope_052020_gad_count = cope_052020_gad[['person_id','answer']].groupby('person_id')['answer'].count().reset_index()
+# print('Description of number of questions pt answer: ',cope_072020_gad_count['answer'].value_counts())
+cope_052020_gad_count = cope_052020_gad_count[cope_052020_gad_count['answer']>0]
+cope_052020_gad_count = cope_052020_gad_count.rename(columns={'answer':'gad_score_count_may'})
+cope_052020_gad_g = cope_052020_gad_count.merge(cope_052020_gad_g, how='left', on='person_id')
+cope_052020_gad_g['gad_score_avg_may'] = cope_052020_gad_g['gad_score_may'] / cope_052020_gad_g['gad_score_count_may']
+cope_052020_gad_g = cope_052020_gad_g[['person_id','gad_score_avg_may','gad_score_may']]
+```
+
+
+```{python}
+cope_062020 = pd.read_csv('2d_cope_062020.csv')
+cope_062020_gad = cope_062020[cope_062020['question'].isin(gad_qs)]
+cope_062020_gad['answer'] = cope_062020_gad['answer'].apply(lambda x:gad_code(x))
+
+### grouby for each patient, and sum the score
+cope_062020_gad_g = cope_062020_gad[['person_id','answer']].groupby('person_id').sum().reset_index()
+cope_062020_gad_g = cope_062020_gad_g.rename(columns={'answer':'gad_score_june'})
+
+cope_062020_gad_count = cope_062020_gad[['person_id','answer']].groupby('person_id')['answer'].count().reset_index()
+# print('Description of number of questions pt answer: ',cope_072020_gad_count['answer'].value_counts())
+cope_062020_gad_count = cope_062020_gad_count[cope_062020_gad_count['answer']>0]
+cope_062020_gad_count = cope_062020_gad_count.rename(columns={'answer':'gad_score_count_june'})
+cope_062020_gad_g = cope_062020_gad_count.merge(cope_062020_gad_g, how='left', on='person_id')
+cope_062020_gad_g['gad_score_avg_june'] = cope_062020_gad_g['gad_score_june'] / cope_062020_gad_g['gad_score_count_june']
+cope_062020_gad_g = cope_062020_gad_g[['person_id','gad_score_avg_june','gad_score_june']]
+```
+
+
+# Exposure: SI from OxCGRT
+```{python}
+us_oxf = us_oxf[us_oxf['RegionName'].notna()]
+us_oxf.head()
+```
+
+```{python}
+us_oxf.info()
+```
+
+
+# Export
+
+```{python}
+# This snippet assumes you run setup first
+
+# This code saves your dataframe into a csv file in a "data" folder in Google Bucket
+
+# Replace df with THE NAME OF YOUR DATAFRAME
+my_dataframe = us_oxf  
+
+# Replace 'test.csv' with THE NAME of the file you're going to store in the bucket (don't delete the quotation marks)
+destination_filename = 'us_oxf_all.csv'
+
+########################################################################
+##
+################# DON'T CHANGE FROM HERE ###############################
+##
+########################################################################
+
+# save dataframe in a csv file in the same workspace as the notebook
+my_dataframe.to_csv(destination_filename, index=False)
+
+# get the bucket name
+my_bucket = os.getenv('WORKSPACE_BUCKET')
+
+# copy csv file to the bucket
+args = ["gsutil", "cp", f"./{destination_filename}", f"{my_bucket}/data/"]
+output = subprocess.run(args, capture_output=True)
+
+# print output from gsutil
+output.stderr
+```
+
+# Filtered by columns
+
+```{python}
+us_oxf = us_oxf[us_oxf['RegionName'].notna()]
+us_oxf = us_oxf[['RegionName','Date','StringencyIndex_Average']]
+```
+
+
+# Export
+```{python}
+# This snippet assumes you run setup first
+
+# This code saves your dataframe into a csv file in a "data" folder in Google Bucket
+
+# Replace df with THE NAME OF YOUR DATAFRAME
+my_dataframe = us_oxf   
+
+# Replace 'test.csv' with THE NAME of the file you're going to store in the bucket (don't delete the quotation marks)
+destination_filename = 'us_oxf.csv'
+
+########################################################################
+##
+################# DON'T CHANGE FROM HERE ###############################
+##
+########################################################################
+
+# save dataframe in a csv file in the same workspace as the notebook
+my_dataframe.to_csv(destination_filename, index=False)
+
+# get the bucket name
+my_bucket = os.getenv('WORKSPACE_BUCKET')
+
+# copy csv file to the bucket
+args = ["gsutil", "cp", f"./{destination_filename}", f"{my_bucket}/data/"]
+output = subprocess.run(args, capture_output=True)
+
+# print output from gsutil
+output.stderr
+```
+
+
+```{python}
+us_oxf['Date'] = us_oxf['Date'].astype(str)
+us_oxf_202005= us_oxf[us_oxf['Date'].str.contains('202005')]
+```
+
+
+```{python}
+### group for each state, and get the avg SI for each state in May
+us_oxf_202005_g = us_oxf_202005[['RegionName','StringencyIndex_Average']].groupby('RegionName').mean().reset_index()
+us_oxf_202005_g = us_oxf_202005_g.rename(columns={'StringencyIndex_Average':'StringencyIndex_Average_202005'})
+```
+
+
+```{python}
+zip3_state = pd.read_csv('zip3.csv') ## ref: https://github.com/billfienberg/zip3/blob/master/zip3.csv
+zip3_state = zip3_state.rename(columns ={'id':'zip3'})
+
+def zip3_format(x):
+    x = str(x)
+    if len(x)==1:
+        x = '00'+x
+    elif len(x)==2:
+        x = '0'+x
+    return x
+
+zip3_state['zip3'] = zip3_state['zip3'].apply(lambda x: zip3_format(x) )
+
+us_state_to_abbrev = {
+    "Alabama": "AL",
+    "Alaska": "AK",
+    "Arizona": "AZ",
+    "Arkansas": "AR",
+    "California": "CA",
+    "Colorado": "CO",
+    "Connecticut": "CT",
+    "Delaware": "DE",
+    "Florida": "FL",
+    "Georgia": "GA",
+    "Hawaii": "HI",
+    "Idaho": "ID",
+    "Illinois": "IL",
+    "Indiana": "IN",
+    "Iowa": "IA",
+    "Kansas": "KS",
+    "Kentucky": "KY",
+    "Louisiana": "LA",
+    "Maine": "ME",
+    "Maryland": "MD",
+    "Massachusetts": "MA",
+    "Michigan": "MI",
+    "Minnesota": "MN",
+    "Mississippi": "MS",
+    "Missouri": "MO",
+    "Montana": "MT",
+    "Nebraska": "NE",
+    "Nevada": "NV",
+    "New Hampshire": "NH",
+    "New Jersey": "NJ",
+    "New Mexico": "NM",
+    "New York": "NY",
+    "North Carolina": "NC",
+    "North Dakota": "ND",
+    "Ohio": "OH",
+    "Oklahoma": "OK",
+    "Oregon": "OR",
+    "Pennsylvania": "PA",
+    "Rhode Island": "RI",
+    "South Carolina": "SC",
+    "South Dakota": "SD",
+    "Tennessee": "TN",
+    "Texas": "TX",
+    "Utah": "UT",
+    "Vermont": "VT",
+    "Virginia": "VA",
+    "Washington": "WA",
+    "West Virginia": "WV",
+    "Wisconsin": "WI",
+    "Wyoming": "WY",
+    "District of Columbia": "DC",
+    "American Samoa": "AS",
+    "Guam": "GU",
+    "Northern Mariana Islands": "MP",
+    "Puerto Rico": "PR",
+    "United States Minor Outlying Islands": "UM",
+    "U.S. Virgin Islands": "VI",
+}
+
+
+df_us_state_to_abbrev = {'state': us_state_to_abbrev.values(), 
+        'RegionName': us_state_to_abbrev.keys()}  
+df_us_state_to_abbrev = pd.DataFrame.from_dict(df_us_state_to_abbrev) 
+
+zip3_state = zip3_state.merge(df_us_state_to_abbrev, how='left', on='state')
+us_oxf_202005_g = us_oxf_202005_g.merge(zip3_state[['zip3', 'RegionName']], on='RegionName', how='left')
+us_oxf_202005_g = us_oxf_202005_g.rename(columns={'zip3':'zip_code'})
+```
+
+
+# Get zip3 AoU data
+
+```{python}
+import pandas
+import os
+
+# This query represents dataset "zip3_2d" for domain "zip_code_socioeconomic" and was generated for All of Us Controlled Tier Dataset v7
+dataset_15775281_zip_code_socioeconomic_sql = """
+    SELECT
+        observation.person_id,
+        zip_code.zip3_as_string as zip_code 
+    FROM
+        `""" + os.environ["WORKSPACE_CDR"] + """.zip3_ses_map` zip_code 
+    JOIN
+        `""" + os.environ["WORKSPACE_CDR"] + """.observation` observation 
+            ON CAST(SUBSTR(observation.value_as_string,
+        0,
+        STRPOS(observation.value_as_string,
+        '*') - 1) AS INT64) = zip_code.zip3  
+    WHERE
+        observation.PERSON_ID IN (
+            SELECT
+                distinct person_id  
+            FROM
+                `""" + os.environ["WORKSPACE_CDR"] + """.cb_search_person` cb_search_person  
+            WHERE
+                cb_search_person.person_id IN (
+                    SELECT
+                        criteria.person_id 
+                    FROM
+                        (SELECT
+                            DISTINCT person_id,
+                            entry_date,
+                            concept_id 
+                        FROM
+                            `""" + os.environ["WORKSPACE_CDR"] + """.cb_search_all_events` 
+                        WHERE
+                            (
+                                concept_id IN(
+                                    SELECT
+                                        DISTINCT c.concept_id 
+                                    FROM
+                                        `""" + os.environ["WORKSPACE_CDR"] + """.cb_criteria` c 
+                                    JOIN
+                                        (
+                                            SELECT
+                                                CAST(cr.id as string) AS id       
+                                            FROM
+                                                `""" + os.environ["WORKSPACE_CDR"] + """.cb_criteria` cr       
+                                            WHERE
+                                                concept_id IN (1586134, 1333342)       
+                                                AND full_text LIKE '%_rank1]%'      
+                                        ) a 
+                                            ON (
+                                                c.path LIKE CONCAT('%.',
+                                            a.id,
+                                            '.%') 
+                                            OR c.path LIKE CONCAT('%.',
+                                            a.id) 
+                                            OR c.path LIKE CONCAT(a.id,
+                                            '.%') 
+                                            OR c.path = a.id) 
+                                        WHERE
+                                            is_standard = 0 
+                                            AND is_selectable = 1
+                                        ) 
+                                        AND is_standard = 0 
+                                )
+                            ) criteria 
+                        ) ) 
+                    AND observation_source_concept_id = 1585250 
+                    AND observation.value_as_string NOT LIKE 'Res%'"""
+
+dataset_15775281_zip_code_socioeconomic_df = pandas.read_gbq(
+    dataset_15775281_zip_code_socioeconomic_sql,
+    dialect="standard",
+    use_bqstorage_api=("BIGQUERY_STORAGE_API_ENABLED" in os.environ),
+    progress_bar_type="tqdm_notebook")
+
+dataset_15775281_zip_code_socioeconomic_df.head(5)
+```
+
+
+```{python}
+zip3 = dataset_15775281_zip_code_socioeconomic_df
+zip3 = zip3[zip3['person_id'].isin(cope_072020_gad_g_pt_ls)]
+zip3['zip_code'] = zip3['zip_code'].apply(lambda x: x[:3])
+zip3 = zip3.merge(us_oxf_202005_g, on='zip_code', how='left')
+zip3
+```
+
+# Combine all together (Exposure, Covariants, Outcome)
+
+```{python}
+mvp_2d = zip3.merge(cope_072020_gad_g, on='person_id', how = 'left')
+mvp_2d = mvp_2d.merge(covariants, on='person_id', how = 'left')
+mvp_2d
+```
+
+
+# Import Export checkpoint
+
+## Export
+```{python}
+mvp_2d.to_csv('mvp_2d_0315.csv', index=False)
+```
+
+## Import
+
+```{python}
+mvp_2d = pd.read_csv('mvp_2d_0315.csv')
+```
+
+# Add policy index
+
+```{python}
+policy_idx_202005 = pd.DataFrame(mvp_2d['RegionName'].unique().tolist())
+policy_idx_202005.columns=['RegionName']
+```
+
+```{python}
+us_oxf = pd.read_csv('OxCGRT_USA_latest.csv')
+us_oxf = us_oxf[us_oxf['RegionName'].notna()]
+us_oxf.columns
+us_oxf_c_idx = us_oxf[['RegionName','Date','C1M_School closing',
+       'C2M_Workplace closing', 'C3M_Cancel public events', 'C4M_Restrictions on gatherings',
+       'C5M_Close public transport','C6M_Stay at home requirements', 'C7M_Restrictions on internal movement', 
+       'C8EV_International travel controls','H1_Public information campaigns']]
+```
+
+
+```{python}
+us_oxf_c_idx['Date'] = us_oxf_c_idx['Date'].astype(str)
+us_oxf_c_idx_202005= us_oxf_c_idx[us_oxf_c_idx['Date'].str.contains('202005')]
+policy_ls =['C1M_School closing',
+       'C2M_Workplace closing', 'C3M_Cancel public events', 'C4M_Restrictions on gatherings',
+       'C5M_Close public transport','C6M_Stay at home requirements', 'C7M_Restrictions on internal movement', 
+       'C8EV_International travel controls','H1_Public information campaigns']
+```
+
+
+```{python}
+### group for each state, and get the avg individual policy index for each state in May
+for policy in policy_ls:
+    us_oxf_c_idx_202005_g = us_oxf_c_idx_202005[['RegionName',policy]].groupby('RegionName').mean().reset_index()
+    p_202005 = policy+'202005'
+    us_oxf_c_idx_202005_g = us_oxf_c_idx_202005_g.rename(columns={'StringencyIndex_Average':p_202005})
+    policy_idx_202005 = policy_idx_202005.merge(us_oxf_c_idx_202005_g, on='RegionName', how='left')
+
+policy_idx_202005
+```
+
+
+```{python}
+mvp_2d = mvp_2d.merge(policy_idx_202005, on='RegionName', how='left')
+mvp_2d.columns
+```
+
+
+```{python}
+## Add total GAD score for each patient
+mvp_2d = mvp_2d.merge(cope_072020_gad_g[['person_id','gad_score']], on='person_id', how='left')
+sns.displot(mvp_2d['gad_score'])
+mvp_2d['gad_score'].quantile([0.25, 0.5, 0.75])
+```
+
+# Import Export Checkpoint
+
+## Export
+
+```{python}
+mvp_2d.to_csv('mvp_2d_0604.csv', index=False)
+```
+
+## Import
+
+```{python}
+data = pd.read_csv('mvp_2d_0604.csv')
+```
+
+
+# Add GAD score for May and June
+
+```{python}
+data= data.merge(cope_052020_gad_g, on='person_id', how='left')
+data= data.merge(cope_062020_gad_g, on='person_id', how='left')
+data = data.rename(columns={'gad_score_avg':'gad_score_avg_july','gad_score':'gad_score_july'})
+data.info()
+```
+
+
+# Export
+
+```{python}
+# This snippet assumes you run setup first
+
+# This code saves your dataframe into a csv file in a "data" folder in Google Bucket
+
+# Replace df with THE NAME OF YOUR DATAFRAME
+my_dataframe = data  
+
+# Replace 'test.csv' with THE NAME of the file you're going to store in the bucket (don't delete the quotation marks)
+destination_filename = 'mvp_2d_0725.csv'
+
+########################################################################
+##
+################# DON'T CHANGE FROM HERE ###############################
+##
+########################################################################
+
+# save dataframe in a csv file in the same workspace as the notebook
+my_dataframe.to_csv(destination_filename, index=False)
+
+# get the bucket name
+my_bucket = os.getenv('WORKSPACE_BUCKET')
+
+# copy csv file to the bucket
+args = ["gsutil", "cp", f"./{destination_filename}", f"{my_bucket}/data/"]
+output = subprocess.run(args, capture_output=True)
+
+# print output from gsutil
+output.stderr
+```
+
+
+```{python}
+# This snippet assumes you run setup first
+
+# This code copies file in your Google Bucket and loads it into a dataframe
+
+# Replace 'test.csv' with THE NAME of the file you're going to download from the bucket (don't delete the quotation marks)
+name_of_file_in_bucket = 'us_oxf_all.csv'
+
+########################################################################
+##
+################# DON'T CHANGE FROM HERE ###############################
+##
+########################################################################
+
+# get the bucket name
+my_bucket = os.getenv('WORKSPACE_BUCKET')
+
+# copy csv file from the bucket to the current working space
+os.system(f"gsutil cp '{my_bucket}/data/{name_of_file_in_bucket}' .")
+
+print(f'[INFO] {name_of_file_in_bucket} is successfully downloaded into your working space')
+# save dataframe in a csv file in the same workspace as the notebook
+my_dataframe = pd.read_csv(name_of_file_in_bucket)
+my_dataframe.head()
+```
+
+

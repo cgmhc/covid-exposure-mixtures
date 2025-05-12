@@ -1,0 +1,182 @@
+---
+title: "Stringency Averages for Exposure Windows"
+author: "Chris Kennedy, Devon Watts, Pratik Nitin Khadse, Karmel Choi"
+date: "2025-04-04"
+output: html_document
+---
+
+# Load packages
+```{r}
+# Install specific versions
+#install.packages("data.table")  # Will install latest version (1.16.4)
+#install.packages("rlang")       # Will install latest version (1.1.4)
+
+# Load these packages first
+library(data.table)
+library(rlang)
+packageVersion("data.table")
+packageVersion("rlang")
+
+
+# Function to install and load packages 
+package_install = function(package_list) {
+  for (pkg in package_list) {
+    if (!requireNamespace(pkg, quietly = TRUE)) {
+      tryCatch({
+        install.packages(pkg)
+      }, error = function(e) {
+        message(paste0("Could not install ", pkg, ": ", e))
+      })
+    }
+    # Load the library
+    library(pkg, character.only = TRUE)
+  }
+}
+
+# List of packages
+packages = c('tidyverse', 'haven', 'qgcomp', 'dplyr', 'ggplot2', 'moments', 
+             'naniar', 'VIM', 'missForest', 'tidymodels', 'purrr', 'gridExtra', 
+             'knitr', 'infotheo', 'igraph', 'ggraph', 'lubridate', 'zoo', 
+             'ggridges', 'slider', 'stats', 'reshape2', 'broom', 'gridExtra',
+             'modelsummary', 'sandwich', 'igraph', 'ggraph', 
+             'arrow', 'rio', 'RCurl')
+
+# Call the package_install function 
+package_install(packages)
+```
+
+
+# Load Files
+
+```{r}
+dir_data = "./"
+```
+
+
+```{r}
+# import the US data
+file_cache = paste0(dir_data, "OxCGRT_US_latest.csv")
+if (!file.exists(file_cache)) {
+  us_url = "https://raw.githubusercontent.com/OxCGRT/USA-covid-policy/master/data/OxCGRT_US_latest.csv"
+  csv = rio::import(file = us_url)
+  # Save to cache
+  rio::export(csv, file = file_cache)
+} else {
+  csv = read.csv(file_cache)
+}
+
+```
+
+```{r}
+# Data clean
+
+## set as data table
+df <- setDT(csv)
+
+## lower case names
+names(df) <- tolower(names(df))
+
+## rename
+setnames(df, "regionname", "state")
+
+## convert date columns to date type
+date_cols <- grep("^date", names(df), value = TRUE)
+df[, (date_cols) := lapply(.SD, function(x) as.Date(as.character(x), "%Y%m%d")), .SDcols = date_cols]
+
+```
+
+
+```{r}
+# Get stringency
+
+## window 1
+strigency_index_1 <- df[date >= as.Date("2020-03-15") & date <= as.Date("2020-06-30"),
+                      .(stringency_march_15_june_30 = mean(stringencyindex)),
+                      by = state]
+
+## window 2
+strigency_index_2 <- df[date >= as.Date("2020-03-22") & date <= as.Date("2020-05-23"),
+                      .(stringency_march_22_may_23 = mean(stringencyindex)),
+                      by = state]
+
+## window 3
+strigency_index_3 <- df[date >= as.Date("2020-04-12") & date <= as.Date("2020-05-23"),
+                      .(stringency_april_12_may_23 = mean(stringencyindex)),
+                      by = state]
+
+## Merge
+df_stringency <- merge(strigency_index_1, strigency_index_2, by = "state")
+df_stringency <- merge(df_stringency, strigency_index_3, by = "state")
+
+```
+
+
+```{r}
+# View
+df_stringency
+```
+
+
+# Save
+```{r}
+## export as RData
+
+# Save RData
+# This code saves your RData
+
+my_file = df_stringency
+
+# Replace with THE NAME of the file you're going to store in the bucket (don't delete the quotation marks)
+destination_filename = '2d_stringency_by_exposure.RData'
+
+########################################################################
+##
+################# DON'T CHANGE FROM HERE ###############################
+##
+########################################################################
+
+# store the data in current workspace
+save(my_file, file = destination_filename)
+
+# Get the bucket name
+my_bucket = Sys.getenv('WORKSPACE_BUCKET')
+
+# Copy the file from current workspace to the bucket
+system(paste0("gsutil cp ./", destination_filename, " ", my_bucket, "/data/"), intern=T)
+
+# Check if file is in the bucket
+system(paste0("gsutil ls ", my_bucket, "/data/*.RData"), intern=T)
+
+```
+
+## Export as parquet
+```{r}
+## export as RData
+
+# Save RData
+# This code saves your RData
+
+my_file = df_stringency
+
+# Replace with THE NAME of the file you're going to store in the bucket (don't delete the quotation marks)
+destination_filename = '2d_stringency_by_exposure.parquet'
+
+########################################################################
+##
+################# DON'T CHANGE FROM HERE ###############################
+##
+########################################################################
+
+# store the data in current workspace
+write_parquet(my_file, destination_filename)
+
+# Get the bucket name
+my_bucket = Sys.getenv('WORKSPACE_BUCKET')
+
+# Copy the file from current workspace to the bucket
+system(paste0("gsutil cp ./", destination_filename, " ", my_bucket, "/data/"), intern=T)
+
+# Check if file is in the bucket
+system(paste0("gsutil ls ", my_bucket, "/data/*.parquet"), intern=T)
+```
+

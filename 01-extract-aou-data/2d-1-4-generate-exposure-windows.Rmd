@@ -1,0 +1,758 @@
+---
+title: "Generate Exposure Windows"
+author: "Devon Watts, Pratik Nitin Khadse"
+date: "2025-05-11"
+output:
+  html_document:
+    toc: yes
+    toc_depth: 3
+    toc_float: yes
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Load packages
+```{r}
+# Install specific versions
+install.packages("data.table")  # Will install latest version (1.16.4)
+install.packages("rlang")       # Will install latest version (1.1.4)
+
+# Load these packages first
+library(data.table)
+library(rlang)
+packageVersion("data.table")
+packageVersion("rlang")
+
+# Installing packages
+package_install = function(package_list) {
+  for (pkg in package_list) {
+    if (!requireNamespace(pkg, quietly = TRUE)) {
+      tryCatch({
+        install.packages(pkg)
+      }, error = function(e) {
+        message(paste0("Could not install ", pkg, ": ", e))
+      })
+    }
+    # Load the library
+    library(pkg, character.only = TRUE)
+  }
+}
+
+# List of packages
+packages = c("tidyverse", "haven", "qgcomp", "dplyr", "ggplot2", 
+            "moments", "naniar", "VIM", "missForest", "tidymodels", 
+            "purrr", "gridExtra", "knitr", "infotheo", "igraph", 
+             "ggraph", "lubridate", "zoo", "ggridges", "slider", 
+             "data.table", "stats", "arrow"
+            )
+
+# Call the package_install function 
+package_install(packages)
+```
+
+# Load data
+
+```{r}
+# This snippet assumes that you run setup first
+
+# This code copies a file from your Google Bucket into a dataframe
+
+# replace 'test.csv' with the name of the file in your google bucket (don't delete the quotation marks)
+name_of_file_in_bucket = 'us_oxf_all.csv'
+
+########################################################################
+##
+################# DON'T CHANGE FROM HERE ###############################
+##
+########################################################################
+
+# Get the bucket name
+my_bucket = Sys.getenv('WORKSPACE_BUCKET')
+
+# Copy the file from current workspace to the bucket
+system(paste0("gsutil cp ", my_bucket, "/data/", name_of_file_in_bucket, " ."), intern=T)
+
+# Load the file into a dataframe
+cope_raw_stringency  = read_csv(name_of_file_in_bucket)
+head(cope_raw_stringency)
+
+```
+
+
+```{r}
+# replace 'test.csv' with the name of the file in your google bucket (don't delete the quotation marks)
+name_of_second_file_in_bucket = 'mvp_2d_0725.csv'
+
+########################################################################
+##
+################# DON'T CHANGE FROM HERE ###############################
+##
+########################################################################
+
+# Get the bucket name
+second_bucket = Sys.getenv('WORKSPACE_BUCKET')
+
+# Copy the file from current workspace to the bucket
+system(paste0("gsutil cp ", second_bucket, "/data/", name_of_second_file_in_bucket, " ."), intern=T)
+
+# Load the file into a dataframe
+cope_auo  = read_csv(name_of_second_file_in_bucket)
+head(cope_auo)
+```
+
+
+```{r}
+# Removing any rows with missing outcome 
+cope_auo = cope_auo %>%
+  filter(!is.na(gad_score_avg_july))
+
+# Converting character columns to factor 
+cope_auo$has_health_insurance = as.factor(cope_auo$has_health_insurance)
+cope_auo$household_income_cat = as.factor(cope_auo$household_income_cat)
+cope_auo$have_job             = as.factor(cope_auo$have_job)
+cope_auo$RegionName           = as.factor(cope_auo$RegionName)
+
+str(cope_auo)
+```
+
+
+# Imputation
+```{r}
+# Removing certain columns (alternative outcomes) prior to imputation
+cope_auo$gad_score_avg_may  = NULL
+cope_auo$gad_score_may      = NULL  
+cope_auo$gad_score_avg_june = NULL
+cope_auo$gad_score_june     = NULL
+cope_auo$'H1_Public information campaigns' = NULL
+cope_auo$'C8EV_International travel controls' = NULL
+cope_auo$'date_of_birth' = NULL
+cope_auo$'zip_code' = NULL 
+cope_auo$'date_of_birth' = NULL
+cope_auo$sex_at_birth = NULL
+cope_auo$age_bin = NULL
+
+# Converting character columns to factor
+cope_auo$gender = as.factor(cope_auo$gender)
+cope_auo$race   = as.factor(cope_auo$race)
+cope_auo$college_graduated  = as.factor(cope_auo$college_graduated)
+cope_auo$married_or_with_sb = as.factor(cope_auo$married_or_with_sb)
+cope_auo$home_ownership = as.factor(cope_auo$home_ownership)
+
+# Checking column names and header
+colnames(cope_auo)
+head(cope_auo)
+```
+
+
+```{r}
+set.seed(42)
+data_split = initial_split(cope_auo, prop = 0.80, strata = "gad_score_avg_july")
+
+# Extract training and testing sets
+train_data = training(data_split)
+test_data = testing(data_split)
+
+# Print dimensions
+print(paste0("Dimensions of train_data: ", dim(train_data)[1], " rows and ", dim(train_data)[2], " columns"))
+print(paste0("Dimensions of test_data: ", dim(test_data)[1], " rows and ", dim(test_data)[2], " columns"))
+
+# Convert to data.frames
+train_data_df = as.data.frame(train_data)
+test_data_df = as.data.frame(test_data)
+
+# Impute missing values in training data
+impute_train = missForest(train_data_df, maxiter = 200)
+train_imputed = impute_train$ximp
+
+# Impute missing values in test data using training data as reference
+test_imputed = missForest(test_data_df, xtrue = train_imputed, maxiter = 200)$ximp
+```
+
+
+```{r}
+# Check for any remaining missing values in training set
+sum(is.na(train_imputed))
+
+# Check for any remaining missing values in test set
+sum(is.na(test_imputed))
+
+# Comparing summary statistics before and after imputation for a few key variables
+summary(train_data$gad_score_avg_july)
+summary(train_data$college_graduated)
+summary(train_data$married_or_with_sb)
+
+summary(train_imputed$gad_score_avg_july)
+summary(train_imputed$college_graduated)
+summary(train_imputed$married_or_with_sb)
+
+# Convert imputed data back to data.tables
+train_imputed_dt = as.data.table(train_imputed)
+#test_imputed_dt = as.data.table(test_imputed)
+
+# Add a column to identify the source of each row
+train_imputed_dt[, source := "train"]
+#test_imputed_dt[, source := "test"]
+
+# Combine the imputed training and testing sets
+cope_auo_imputed = rbindlist(list(train_imputed_dt, test_imputed_dt), use.names = TRUE, fill = TRUE)
+
+# Verify the dimensions of the rejoined dataset
+print(paste0("Dimensions of cope_auo_imputed: ", dim(cope_auo_imputed)[1], " rows and ", dim(cope_auo_imputed)[2], " columns"))
+```
+
+
+```{r}
+# Removing empty spaces, replacing with "_"
+cope_raw_stringency = cope_raw_stringency %>%
+    rename_with(~ gsub(" ", "_", .x))
+
+colnames(cope_raw_stringency)
+head(cope_raw_stringency)
+str(cope_raw_stringency)
+
+```
+
+# Data preprocessing to generate prior exposure windows
+
+```{r}
+cope_raw_stringency$Date = as.Date(as.character(cope_raw_stringency$Date), format="%Y%m%d")
+head(cope_raw_stringency$Date)
+cope_raw_stringency$RegionName = as.factor(cope_raw_stringency$RegionName)
+head(cope_raw_stringency$RegionName)
+```
+
+
+```{r}
+# Subset the data
+covid_subset = cope_raw_stringency %>%
+  filter(Date >= "2020-03-11" & Date <= "2020-06-30")
+
+# Select relevant columns
+columns_of_interest = c("Date", "RegionName", "C1M_School_closing", "C2M_Workplace_closing", 
+                         "C3M_Cancel_public_events", "C4M_Restrictions_on_gatherings", 
+                         "C5M_Close_public_transport", "C6M_Stay_at_home_requirements", 
+                         "C7M_Restrictions_on_internal_movement")
+
+covid_subset = covid_subset %>%
+  select(all_of(columns_of_interest))
+
+head(covid_subset)
+str(covid_subset)
+```
+
+
+```{r}
+# Reshape the data
+covid_long = covid_subset %>%
+  pivot_longer(cols = -c(Date, RegionName), names_to = "Measure", values_to = "Value")
+
+str(covid_long)
+head(covid_long)
+```
+
+
+```{r}
+# Calculate average stringency across states for each date and measure
+covid_avg = covid_long %>%
+  group_by(Date, Measure) %>%
+  summarize(AvgValue = mean(Value, na.rm = TRUE),
+            MinValue = min(Value, na.rm = TRUE),
+            MaxValue = max(Value, na.rm = TRUE)) %>%
+  ungroup()
+```
+
+```{r}
+# The solid line represents the average stringency across all states for each measure.
+# The shaded area shows the range of stringency values across states, giving an idea of the variation between states.
+
+ggplot(covid_avg, aes(x = Date, y = AvgValue)) +
+  geom_line(aes(color = Measure), linewidth = 1) +
+  geom_ribbon(aes(ymin = MinValue, ymax = MaxValue, fill = Measure), alpha = 0.3) +
+  scale_x_date(date_labels = "%b", date_breaks = "1 month") +
+  scale_y_continuous(breaks = seq(0, 4, by = 1)) +
+  labs(title = "COVID-19 Stringency Measures Over Time (State Averages)",
+       x = "Month (2020)",
+       y = "Average Stringency Level") +
+  theme_classic() +
+  theme(legend.position = "bottom",
+        legend.title = element_blank()) +
+  facet_wrap(~ Measure, scales = "free_y", ncol = 2)
+```
+
+
+
+```{r}
+# Function to analyze C4M and C5M measures
+analyze_c4m_c5m = function(data) {
+  results = data %>%
+    filter(Measure %in% c("C4M_Restrictions_on_gatherings", "C5M_Close_public_transport")) %>%
+    group_by(RegionName, Measure) %>%
+    summarize(
+      AvgStringency = mean(Value, na.rm = TRUE),
+      ZeroStringency = all(Value == 0),
+      .groups = "drop"
+    ) %>%
+    group_by(Measure) %>%
+    summarize(
+      TotalStates = n_distinct(RegionName),
+      StatesWithZeroStringency = sum(ZeroStringency),
+      AvgStringencyAcrossStates = mean(AvgStringency, na.rm = TRUE),
+      StringencyDistribution = list(table(AvgStringency)),
+      .groups = "drop"
+    )
+  
+  return(results)
+}
+
+# Analyze C4M and C5M
+c4m_c5m_analysis = analyze_c4m_c5m(covid_long)
+
+# Print results
+print(c4m_c5m_analysis)
+```
+
+
+```{r}
+analyze_c4m_c5m = function(data) {
+  start_date = as.Date("2020-03-15")
+  end_date = as.Date("2020-06-30")
+  
+  results = data %>%
+    filter(Measure %in% c("C4M_Restrictions_on_gatherings", "C5M_Close_public_transport"),
+           Date >= start_date, Date <= end_date) %>%
+    group_by(RegionName, Measure) %>%
+    summarize(
+      AlwaysZero = all(Value == 0),
+      AlwaysOne = all(Value == 1),
+      AlwaysTwo = all(Value == 2),
+      AlwaysThree = all(Value == 3),
+      AlwaysFour = all(Value == 4),
+      .groups = "drop"
+    ) %>%
+    group_by(Measure) %>%
+    summarize(
+      TotalStates = n_distinct(RegionName),
+      StatesAlwaysZero = sum(AlwaysZero),
+      StatesAlwaysOne = sum(AlwaysOne),
+      StatesAlwaysTwo = sum(AlwaysTwo),
+      StatesAlwaysThree = sum(AlwaysThree),
+      StatesAlwaysFour = sum(AlwaysFour),
+      StatesAlwaysZeroList = list(RegionName[AlwaysZero]),
+      StatesAlwaysOneList = list(RegionName[AlwaysOne]),
+      StatesAlwaysTwoList = list(RegionName[AlwaysTwo]),
+      StatesAlwaysThreeList = list(RegionName[AlwaysThree]),
+      StatesAlwaysFourList = list(RegionName[AlwaysFour]),
+      .groups = "drop"
+    )
+  
+  return(results)
+}
+
+# Analyze C4M and C5M
+c4m_c5m_analysis = analyze_c4m_c5m(covid_long)
+
+# Print results
+print(c4m_c5m_analysis)
+print(c4m_c5m_analysis$StatesAlwaysThree)
+print(c4m_c5m_analysis$StatesAlwaysFour)
+```
+
+
+```{r}
+# Modified function to plot stringency distribution
+plot_stringency_distribution = function(data, measure) {
+  dist_data = data %>%
+    filter(Measure == measure) %>%
+    group_by(Value) %>%
+    summarize(Count = n(), .groups = "drop")
+  
+  # Create stringency bins
+  dist_data = dist_data %>%
+    mutate(StringencyBin = cut(Value, 
+                               breaks = c(-Inf, 0, 1, 2, 3, Inf),
+                               labels = c("0", "0-1", "1-2", "2-3", "3-4"),
+                               include.lowest = TRUE))
+  
+  # Summarize data by bins
+  binned_data = dist_data %>%
+    group_by(StringencyBin) %>%
+    summarize(TotalCount = sum(Count), .groups = "drop")
+  
+  # Create the plot
+  ggplot(binned_data, aes(x = StringencyBin, y = TotalCount)) +
+    geom_bar(stat = "identity", fill = "steelblue") +
+    geom_text(aes(label = TotalCount), vjust = -0.5) +  # Add count labels
+    labs(title = paste("Distribution of Stringency -", measure),
+         x = "Stringency Level",
+         y = "Number of State-Days") +
+    theme_classic() +
+    theme(axis.text.x = element_text(angle = 0, hjust = 0.5))  # Ensure x-axis labels are readable
+}
+
+# Create and save plots for C4M and C5M
+c4m_plot = plot_stringency_distribution(covid_long, "C4M_Restrictions_on_gatherings")
+c5m_plot = plot_stringency_distribution(covid_long, "C5M_Close_public_transport")
+
+# Regenerating plots
+c4m_plot
+c5m_plot
+```
+
+
+```{r}
+# Identify states with zero stringency
+states_zero_stringency = covid_long %>%
+  filter(Measure %in% c("C4M_Restrictions_on_gatherings", "C5M_Close_public_transport")) %>%
+  group_by(RegionName, Measure) %>%
+  summarize(
+    ZeroStringency = all(Value == 0),
+    .groups = "drop"
+  ) %>%
+  filter(ZeroStringency) %>%
+  arrange(Measure, RegionName)
+
+# Print states with zero stringency
+print(states_zero_stringency)
+
+```
+
+
+```{r}
+generate_exposure_windows = function(data, granularity, covid_start, outcome_start, 
+                                    columns_of_interest, summary_function = "round_mean") {
+  
+  setDT(data)  # Convert to data.table if not already
+  
+  # Calculate the number of start date options
+  exposure_start_range = as.numeric(outcome_start - covid_start)
+  start_date_options = floor(exposure_start_range / granularity)
+  
+  # Create a list to store results
+  results = list()
+  
+  # Counter for combinations
+  combination_count = 0
+  
+  # Outer loop: start date
+  for (i in 0:(start_date_options - 1)) {
+    start_date_i = covid_start + days(i * granularity)
+    
+    # Calculate the number of duration options for this start date
+    max_duration = as.numeric(outcome_start - start_date_i)
+    duration_options = floor(max_duration / granularity)
+    
+    # Inner loop: duration
+    for (j in 1:duration_options) {
+      duration_j = j * granularity
+      end_date_j = start_date_i + days(duration_j - 1)
+      
+      # Subset the data for the current window
+      window_data = data[Date >= start_date_i & Date <= end_date_j, 
+                        c("RegionName", "Date", ..columns_of_interest)]
+      
+      # Calculate summary statistics based on the selected function
+      if (summary_function == "mode") {
+        # Define a mode function
+        get_mode = function(x) {
+          ux = unique(x)
+          ux[which.max(tabulate(match(x, ux)))]
+        }
+        window_stats = window_data[, lapply(.SD, get_mode), 
+                                  by = RegionName, 
+                                  .SDcols = columns_of_interest]
+      } else if (summary_function == "round_mean") {
+        # Round the mean to the nearest integer
+        window_stats = window_data[, lapply(.SD, function(x) round(mean(x, na.rm = TRUE))), 
+                                  by = RegionName, 
+                                  .SDcols = columns_of_interest]
+                                            
+      } else if (summary_function == "average") {
+        # Calculate mean without rounding (keeping decimal points)
+        window_stats = window_data[, lapply(.SD, function(x) mean(x, na.rm = TRUE)),
+                                        by = RegionName,
+                                        .SDcols = columns_of_interest]                                  
+                                            
+      } else {
+        # Default to round_mean if an invalid option is provided
+        warning("Invalid summary_function provided. Using 'round_mean' as default.")
+        window_stats = window_data[, lapply(.SD, function(x) round(mean(x, na.rm = TRUE))), 
+                                  by = RegionName, 
+                                  .SDcols = columns_of_interest]
+      }      
+     
+      # Create the new key for this window
+      window_key = sprintf("%s_%s_dur%d", 
+                          format(start_date_i, "%Y%m%d"),
+                          format(end_date_j, "%Y%m%d"),
+                          duration_j)
+      
+      # Store the result with metadata
+      results[[window_key]] = list(
+        start_date = start_date_i,
+        end_date = end_date_j,
+        duration = duration_j,
+        data = window_stats 
+      )
+      
+      combination_count = combination_count + 1
+    }
+  }
+  
+  # Print the number of combinations
+  print(sprintf("Generated %d combinations of start and end dates.", combination_count))
+  
+  return(results)
+}
+```
+
+
+```{r}
+covid_start = as.Date("2020-03-15")
+outcome_start = as.Date("2020-07-01")
+granularity = 7
+columns_of_interest = c("C1M_School_closing", "C2M_Workplace_closing", 
+                         "C3M_Cancel_public_events", "C4M_Restrictions_on_gatherings", 
+                         "C5M_Close_public_transport", "C6M_Stay_at_home_requirements", 
+                         "C7M_Restrictions_on_internal_movement")
+
+exposure_windows = generate_exposure_windows(cope_raw_stringency, 
+                                             granularity, 
+                                             covid_start, 
+                                             outcome_start, 
+                                             columns_of_interest,
+                                             summary_function = "average"
+                                            )
+```
+
+
+```{r}
+combine_exposure_individual_data = function(exposure_windows, cope_auo) {
+  # Create a lookup table from cope_auo with required columns
+  lookup_table = cope_auo %>%
+    select(person_id, RegionName, gad_score_avg_july, age_2020, 
+           has_health_insurance, household_income_cat, have_job)
+
+  # Initialize the result list
+  combined_exposure_data = list()
+
+  # Loop through each exposure window
+  for (window_name in names(exposure_windows)) {
+    # Get the current window data
+    window_data = exposure_windows[[window_name]]$data
+
+    # Perform a left join of lookup_table with window_data
+    combined_data = lookup_table %>%
+      left_join(window_data, by = "RegionName") %>%
+      # Move RegionName to the beginning of the dataframe
+      select(RegionName, everything())
+
+    # Store the result in the new list
+    combined_exposure_data[[window_name]] = list(
+      start_date = exposure_windows[[window_name]]$start_date,
+      end_date = exposure_windows[[window_name]]$end_date,
+      duration = exposure_windows[[window_name]]$duration,
+      data = combined_data
+    )
+  }
+
+  return(combined_exposure_data)
+}
+
+combined_exposure_data = combine_exposure_individual_data(exposure_windows, cope_auo)
+```
+
+
+```{r}
+# Checking structure of overall object and a specific date window 
+str(combined_exposure_data)
+str(combined_exposure_data$'20200315_20200321_dur7'$data)
+```
+
+```{r}
+table(combined_exposure_data$'20200315_20200321_dur7'$data$C4M_Restrictions_on_gatherings)
+```
+
+
+```{r}
+str(combined_exposure_data)
+```
+
+
+```{r}
+# Function to check distributions for specified columns in a specific window
+check_distributions = function(combined_data, window_name, columns_to_check) {
+  # Get the data for the specified window
+  window_data = combined_data[[window_name]]$data
+  
+  # Check each requested column
+  for (col in columns_to_check) {
+    if (col %in% names(window_data)) {
+      cat("\n--------------------------------------------------")
+      cat("\nDistribution for", col, "in window", window_name, ":\n")
+      
+      if (is.numeric(window_data[[col]])) {
+        # For numeric columns, show summary first
+        print(summary(window_data[[col]]))
+        cat("\nAverage value of policy during exposure window:\n")
+      }
+      
+      # Show actual distribution (not rounded) for any column type
+      print(table(window_data[[col]], useNA = "ifany"))
+    } else {
+      cat("\nColumn", col, "not found in window", window_name, "\n")
+    }
+  }
+}
+
+# Example usage:
+covid_policy_columns = c(
+  "C1M_School_closing", 
+  "C2M_Workplace_closing", 
+  "C3M_Cancel_public_events", 
+  "C4M_Restrictions_on_gatherings",
+  "C5M_Close_public_transport", 
+  "C6M_Stay_at_home_requirements",
+  "C7M_Restrictions_on_internal_movement", 
+  "RegionName"
+)
+
+# Check distributions for a specific window
+window_name = "20200315_20200321_dur7"
+check_distributions(combined_exposure_data, window_name, covid_policy_columns)
+```
+
+
+
+```{r}
+# Function to remove NA values in C1-C7 columns for all windows
+remove_na_policy_rows = function(combined_data) {
+  # Create new list to store cleaned data
+  cleaned_data = list()
+  
+  # Policy columns to check for NAs
+  policy_cols = c(
+    "C1M_School_closing", "C2M_Workplace_closing", "C3M_Cancel_public_events", 
+    "C4M_Restrictions_on_gatherings", "C5M_Close_public_transport", 
+    "C6M_Stay_at_home_requirements", "C7M_Restrictions_on_internal_movement"
+  )
+  
+  # Process each window
+  for (window_name in names(combined_data)) {
+    # Get window metadata
+    window_info = combined_data[[window_name]]
+    
+    # Get data for this window
+    window_data = window_info$data
+    
+    # Count rows before filtering
+    rows_before = nrow(window_data)
+    
+    # Remove rows with NA in any of the policy columns
+    window_data_clean = window_data %>%
+      filter(if_all(all_of(policy_cols), ~!is.na(.)))
+    
+    # Count rows after filtering
+    rows_after = nrow(window_data_clean)
+    rows_removed = rows_before - rows_after
+    
+    # Print removal summary
+    cat(sprintf("Window %s: Removed %d rows with NAs (%.2f%%)\n", 
+                window_name, rows_removed, (rows_removed/rows_before)*100))
+    
+    # Store cleaned data with original metadata
+    cleaned_data[[window_name]] = list(
+      start_date = window_info$start_date,
+      end_date = window_info$end_date,
+      duration = window_info$duration,
+      data = window_data_clean
+    )
+  }
+  
+  return(cleaned_data)
+}
+
+# Apply the function to clean all windows
+combined_exposure_data_clean = remove_na_policy_rows(combined_exposure_data)
+
+# Verify the cleaning for the first window
+first_window = names(combined_exposure_data_clean)[1]
+first_window_data_clean = combined_exposure_data_clean[[first_window]]$data
+
+# Check the dimensions
+cat("\nOriginal rows:", nrow(combined_exposure_data[[first_window]]$data), "\n")
+cat("Cleaned rows:", nrow(first_window_data_clean), "\n")
+
+# Check that there are no more NAs in the policy columns
+policy_cols = c("C1M_School_closing", "C2M_Workplace_closing", "C3M_Cancel_public_events", 
+                "C4M_Restrictions_on_gatherings", "C5M_Close_public_transport", 
+                "C6M_Stay_at_home_requirements", "C7M_Restrictions_on_internal_movement",
+               "RegionName")
+
+cat("\nNA counts in cleaned data:\n")
+sapply(policy_cols, function(col) sum(is.na(first_window_data_clean[[col]])))
+```
+
+
+# Export
+```{r}
+# Define the filename for the combined exposure data
+exposure_filename = "combined_exposure_data_final_average.RData"
+
+# Save combined exposure data as RData
+save(combined_exposure_data_clean, file = exposure_filename)
+
+# First, verify the file is created locally
+if (!file.exists(exposure_filename)) {
+  stop("Local file not created successfully")
+}
+
+# Create a function to handle file copying and verification
+verify_bucket_copy = function(filename, bucket_path) {
+  # Define the full bucket path
+  full_bucket_path = paste0(bucket_path, "/data/", filename)
+  
+  # Copy file to bucket
+  copy_result = system(paste0("gsutil cp ./", filename, " ", bucket_path, "/data/"), intern=TRUE)
+  
+  # Verify copy was successful
+  file_extension = tools::file_ext(filename)
+  ls_result = system(paste0("gsutil ls ", bucket_path, "/data/*.", file_extension), intern=TRUE)
+  
+  # Check if file exists in bucket
+  if (!any(grepl(filename, ls_result))) {
+    warning(paste("File", filename, "not found in bucket"))
+    return(list(success = FALSE, path = NULL))
+  }
+  return(list(success = TRUE, path = full_bucket_path))
+}
+
+# Execute the verification process
+tryCatch({
+  # Copy and verify exposure data
+  verification_result = verify_bucket_copy(exposure_filename, my_bucket)
+  
+  # Print verification results
+  if (verification_result$success) {
+    message("File successfully copied and verified in bucket")
+    message(paste("File location:", verification_result$path))
+  } else {
+    warning("File may not have been copied successfully")
+  }
+}, error = function(e) {
+  stop(paste("Error in bucket operations:", e$message))
+})
+```
+
+```{r}
+str(combined_exposure_data_clean)
+```
+
+
+```{r}
+
+```
+

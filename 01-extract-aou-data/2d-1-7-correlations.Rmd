@@ -1,0 +1,501 @@
+---
+title: "Correlations"
+author: "Devon Watts, Pratik Nitin Khadse"
+date: "2025-05-11"
+output:
+  html_document:
+    toc: yes
+    toc_depth: 3
+    toc_float: yes
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Load packages
+
+```{r}
+#remotes::install_github("ck37/ck37r")
+
+# Create a list of required packages
+required_packages = c("tidyverse", "bigrquery", "reshape2", "dplyr", 
+                       "broom", "writexl", "forcats", "missRanger",
+                      "arrow", "ggplot2", "patchwork", "caret", "corrplot", "ck37r",
+                     "data.table")
+
+# Function to install missing packages
+install_if_missing = function(package) {
+ if (!requireNamespace(package, quietly = TRUE)) {
+   install.packages(package)
+ }
+}
+
+# Install and load each package
+for (package in required_packages) {
+ tryCatch({
+   install_if_missing(package)
+   library(package, character.only = TRUE)
+ }, error = function(e) {
+   message(sprintf("Failed to load package: %s\nError: %s", package, e$message))
+ })
+}
+```
+
+# Load cope data
+```{r}
+# This snippet assumes that you run setup first
+
+# This code copies a file from your Google Bucket into a dataframe
+
+# replace 'test.csv' with the name of the file in your google bucket (don't delete the quotation marks)
+name_of_file_in_bucket <- 'mvp_2d_0725.csv'
+
+########################################################################
+##
+################# DON'T CHANGE FROM HERE ###############################
+##
+########################################################################
+
+# Get the bucket name
+my_bucket <- Sys.getenv('WORKSPACE_BUCKET')
+
+# Copy the file from current workspace to the bucket
+system(paste0("gsutil cp ", my_bucket, "/data/", name_of_file_in_bucket, " ."), intern=T)
+
+# Load the file into a dataframe
+cope_auo  <- read_csv(name_of_file_in_bucket)
+head(cope_auo)
+```
+
+
+```{r}
+# Preprocess
+# Converting character columns to factors
+cope_auo$RegionName           = as.factor(cope_auo$RegionName)
+cope_auo$gender               = as.factor(cope_auo$gender)
+cope_auo$has_health_insurance = as.factor(cope_auo$has_health_insurance)
+cope_auo$have_job             = as.factor(cope_auo$have_job)
+cope_auo$college_graduated    = as.factor(cope_auo$college_graduated)
+cope_auo$has_health_insurance = as.factor(cope_auo$has_health_insurance)
+cope_auo$age_bin              = as.factor(cope_auo$age_bin)
+cope_auo$household_income_cat = as.factor(cope_auo$household_income_cat)
+cope_auo$race                 = as.factor(cope_auo$race)
+cope_auo$zip_code             = as.factor(cope_auo$zip_code)
+cope_auo$home_ownership       = as.factor(cope_auo$home_ownership)
+
+# Change column names to use underscores instead of spaces
+colnames(cope_auo) = gsub(" ", "_", colnames(cope_auo))
+```
+
+
+# Load imputed data
+
+```{r}
+# Load the parquet file
+parquet_filename = 'df_consensus_with_distributions_wald_final.parquet'
+system(paste0("gsutil cp ", my_bucket, "/data/", parquet_filename, " ."), intern=T)
+conditions_df = read_parquet(parquet_filename)
+head(conditions_df)
+```
+
+# Load combined exposure data
+
+```{r}
+# --- NEW CODE START ---
+# Define the filename for the combined exposure data (an .RData file)
+exposure_filename = "combined_exposure_data_final_mode.RData"
+
+# Get the bucket name from the environment
+my_bucket = Sys.getenv('WORKSPACE_BUCKET')
+
+# Copy the .RData file from the bucket to your local working directory
+system(paste0("gsutil cp ", my_bucket, "/data/", exposure_filename, " ."), intern = TRUE)
+
+# Check that the file was copied correctly (optional)
+print(list.files())
+
+# Load the RData file into your environment.
+# The load() function returns a character vector with the names of the objects loaded.
+loaded_objs = load(exposure_filename)
+print(loaded_objs)
+str(combined_exposure_data)
+```
+
+```{r}
+# Function to process and rename exposure data
+process_exposure_data = function(period_key, suffix) {
+  # Find keys that start with the given period_key
+  key_match = grep(paste0("^", period_key), names(combined_exposure_data), value = TRUE)
+  
+  # Check if a matching key was found
+  if (length(key_match) == 0) {
+    stop("No matching key for ", period_key, " found in combined_exposure_data")
+  }
+  
+  # Use the first matching key (assuming there is only one that fits)
+  combined_exposure_data[[ key_match[1] ]]$data %>%
+    select(person_id, 
+           C1M_School_closing,
+           C2M_Workplace_closing,
+           C3M_Cancel_public_events,
+           C4M_Restrictions_on_gatherings,
+           C5M_Close_public_transport,
+           C6M_Stay_at_home_requirements,
+           C7M_Restrictions_on_internal_movement) %>%
+    rename_with(~ paste0(., suffix), -person_id)
+}
+
+# Process both periods
+cope_auo_20200405_20200530 = process_exposure_data(
+  '20200405_20200530', 
+  "_April_5_May_30"
+)
+
+cope_auo_20200405_20200627 = process_exposure_data(
+  "20200405_20200627", 
+  "_April_5_June_30"
+)
+
+cope_auo_20200524_20200627 = process_exposure_data(
+  "20200524_20200627", 
+  "_May_24_June_30"
+)
+```
+
+```{r}
+# Merge exposure data into main dataframe
+cope_auo_windows = cope_auo %>%
+  left_join(cope_auo_20200405_20200530, by = "person_id") %>%
+  left_join(cope_auo_20200405_20200627, by = "person_id") %>%
+left_join(cope_auo_20200524_20200627, by = "person_id")
+
+# Verify new columns
+message("New columns added:")
+print(colnames(cope_auo_windows)[grepl("April_5", colnames(cope_auo_windows))])
+
+# Checking structure of cope_auo data with windows added
+str(cope_auo_windows)
+
+# Ensure each row is a unique individual
+cope_auo_unique = cope_auo_windows %>%
+  distinct(person_id, .keep_all = TRUE)
+```
+
+
+```{r}
+# Check number of rows
+
+nrow(cope_auo)
+nrow(cope_auo_unique)
+nrow(conditions_df)
+```
+
+```{r}
+# Creating a merged dataset using columns of interest from cope_auo_unique and conditions_df
+# Note that conditions_df contains the propensity score values and some covariates of interest
+cope_auo_ps = cope_auo_unique %>%
+  select(
+    person_id,
+    RegionName,
+    StringencyIndex_Average_202005,
+    gad_score_avg_july,
+    date_of_birth,
+    age_2020,
+    C1M_School_closing,
+    C2M_Workplace_closing,
+    C3M_Cancel_public_events,
+    C4M_Restrictions_on_gatherings,
+    C5M_Close_public_transport,
+    C6M_Stay_at_home_requirements,
+    C7M_Restrictions_on_internal_movement,
+    C1M_School_closing_April_5_May_30,
+    C2M_Workplace_closing_April_5_May_30, 
+    C3M_Cancel_public_events_April_5_May_30,
+    C4M_Restrictions_on_gatherings_April_5_May_30, 
+    C5M_Close_public_transport_April_5_May_30, 
+    C6M_Stay_at_home_requirements_April_5_May_30, 
+    C7M_Restrictions_on_internal_movement_April_5_May_30, 
+    C1M_School_closing_April_5_June_30, 
+    C2M_Workplace_closing_April_5_June_30, 
+    C3M_Cancel_public_events_April_5_June_30, 
+    C4M_Restrictions_on_gatherings_April_5_June_30, 
+    C5M_Close_public_transport_April_5_June_30, 
+    C6M_Stay_at_home_requirements_April_5_June_30, 
+    C7M_Restrictions_on_internal_movement_April_5_June_30,
+      C1M_School_closing_May_24_June_30, 
+    C2M_Workplace_closing_May_24_June_30, 
+    C3M_Cancel_public_events_May_24_June_30, 
+    C4M_Restrictions_on_gatherings_May_24_June_30, 
+    C5M_Close_public_transport_May_24_June_30, 
+    C6M_Stay_at_home_requirements_May_24_June_30, 
+    C7M_Restrictions_on_internal_movement_May_24_June_30,
+    gad_score_july,
+    gad_score_avg_may,
+    gad_score_may,
+    gad_score_avg_june,
+    gad_score_june
+  ) %>%
+  inner_join(
+    conditions_df %>% 
+      select(
+        person_id,
+        anxiety_disorder_before_covid_lifetime,
+        generalized_anxiety_disorder_before_covid_lifetime,
+        anxiety_disorder_1yr_before_covid,
+        generalized_anxiety_disorder_1yr_before_covid,
+        response_prob,
+        observation_wt,
+        sex,
+        education,
+        employment,
+        insurance,
+        home,
+        income,
+        maritalstatus,
+        race,
+        birthplace
+      ),
+    by = "person_id"
+  ) %>%
+  mutate(
+    log_observation_wt = log(observation_wt)
+  )
+
+
+nrow(cope_auo_ps)
+```
+
+
+```{r}
+# Removing any rows with missing values in exposures 
+cope_auo_ps = cope_auo_ps %>%
+  filter(
+    !is.na(C1M_School_closing) &
+      !is.na(C2M_Workplace_closing) &
+      !is.na(C3M_Cancel_public_events) &
+      !is.na(C4M_Restrictions_on_gatherings) &
+      !is.na(C5M_Close_public_transport) &
+      !is.na(C6M_Stay_at_home_requirements) &
+      !is.na(C7M_Restrictions_on_internal_movement)
+  )
+
+# Subset for June
+cope_auo_june = cope_auo_ps %>%
+  filter(!is.na(gad_score_avg_june))
+
+# Subset for July
+cope_auo_july = cope_auo_ps %>%
+  filter(!is.na(gad_score_avg_july))
+
+# Remove rows with missing data in specified covariates
+cope_auo_july_no_miss = cope_auo_july %>% 
+  filter(!is.na(insurance) & 
+           !is.na(income) & 
+           !is.na(employment) & 
+           !is.na(education) & 
+           !is.na(sex) & 
+           !is.na(age_2020))
+
+# Round ages using round() function
+cope_auo_july_no_miss = cope_auo_july_no_miss %>%
+  mutate(age_rounded = round(age_2020))
+
+# Check for any individuals under 18 using rounded ages
+check_lessthan18 = cope_auo_july_no_miss %>%
+  summarise(
+    min_age_raw = min(age_2020, na.rm = TRUE),
+    min_age_rounded = min(age_rounded, na.rm = TRUE),
+    n_under18 = sum(age_rounded < 18, na.rm = TRUE)
+  )
+
+cat("Age validation results:\n")
+cat("Minimum age in dataset (raw):", check_lessthan18$min_age_raw, "\n")
+cat("Minimum age in dataset (rounded):", check_lessthan18$min_age_rounded, "\n")
+cat("Number of individuals under 18:", check_lessthan18$n_under18, "\n")
+
+# Create age bins using rounded ages
+cope_auo_july_no_miss = cope_auo_july_no_miss %>%
+  mutate(binned_age = factor(case_when(
+    age_rounded >= 18 & age_rounded <= 24 ~ "18-24",
+    age_rounded >= 25 & age_rounded <= 44 ~ "25-44",
+    age_rounded >= 45 & age_rounded <= 64 ~ "45-64",
+    age_rounded >= 65 & age_rounded <= 89 ~ "65-89",
+    age_rounded >= 90 ~ "90+",
+    TRUE ~ NA_character_
+  ), levels = c("18-24", "25-44", "45-64", "65-89", "90+"), ordered = TRUE))
+```
+
+```{r}
+# Sanity Check: Verify no remaining missing values
+any_missing = sapply(cope_auo_july_no_miss, function(x) any(is.na(x)))
+
+# Print statements for whether there are missing values
+if(any(any_missing)) {
+  cat("Missing values found in the following columns:\n")
+  print(names(cope_auo_july_no_miss)[any_missing])
+  # Optionally print count of missing values per column
+  missing_counts = sapply(cope_auo_july_no_miss[,any_missing], function(x) sum(is.na(x)))
+  print(missing_counts)
+} else {
+  cat("No missing values found in any column.\n")
+}
+```
+
+
+
+# C1M
+
+# Correlations: april 5 may 30
+
+```{r}
+df <- cope_auo_july_no_miss %>%
+select(age_2020,
+       home,
+       maritalstatus,
+       race,
+       education,
+       employment,
+       insurance,
+       anxiety_disorder_before_covid_lifetime,
+       anxiety_disorder_1yr_before_covid,
+       sex,
+       birthplace,
+       generalized_anxiety_disorder_before_covid_lifetime,
+       generalized_anxiety_disorder_1yr_before_covid,
+       #including additional covariates used to generate propensity scores
+       C1M_School_closing_April_5_May_30
+)
+# Check variation in C1M across all dataset
+table(df$C1M_School_closing_April_5_May_30)
+```
+
+```{r}
+cope_auo_july_no_miss %>%
+  count(RegionName, C1M_School_closing_April_5_May_30) %>%
+  arrange(RegionName, desc(n))
+```
+
+# Linear Combos
+
+```{r}
+# Check linear combinations
+
+## Get non factor columns
+df_non_factors = df[, !sapply(df, is.factor)]
+
+## Get factor columns
+df_factors = df[, sapply(df, is.factor)]
+
+## Convert factor columns to character
+df_factors[] = lapply(df_factors, as.character)
+
+# Convert factor columns to dummy variables
+df_dummy = model.matrix(~ . - 1, data = df_factors)  # Removes intercept column
+
+# Convert to a data frame
+df_dummy = as.data.frame(df_dummy)
+
+## Merge dummy variables with the original numeric columns
+df_corr_check = cbind(df_non_factors, df_dummy)
+
+## check colnames
+colnames(df_corr_check)
+
+## Check number of features
+cat("Reviewing", length(df_corr_check), "columns for duplication.\n")
+
+## Convert to matrix
+df_mat = as.matrix(df_corr_check)
+
+## Get combos: 3 sec
+system.time({
+  combos = caret::findLinearCombos(df_mat)
+})
+```
+
+# Import Export Checkpoint
+
+# Export
+
+```{r}
+# Save RData
+# This code saves your RData
+
+my_file = combos
+
+# Replace with THE NAME of the file you're going to store in the bucket (don't delete the quotation marks)
+destination_filename = 'cope_linear_combos_c1m_april_5_may_30.RData'
+
+########################################################################
+##
+################# DON'T CHANGE FROM HERE ###############################
+##
+########################################################################
+
+# store the data in current workspace
+save(my_file, file = destination_filename)
+
+# Get the bucket name
+my_bucket = Sys.getenv('WORKSPACE_BUCKET')
+
+# Copy the file from current workspace to the bucket
+system(paste0("gsutil cp ./", destination_filename, " ", my_bucket, "/data/"), intern=T)
+
+# Check if file is in the bucket
+system(paste0("gsutil ls ", my_bucket, "/data/*.RData"), intern=T)
+```
+
+# Import
+
+```{r}
+# Load data
+# This snippet assumes that you run setup first
+
+# This code loads rdata
+
+# replace 'test.csv' with the name of the file in your google bucket (don't delete the quotation marks)
+name_of_file_in_bucket = 'cope_linear_combos_c1m_april_5_may_30.RData'
+
+########################################################################
+##
+################# DON'T CHANGE FROM HERE ###############################
+##
+########################################################################
+
+# Get the bucket name
+my_bucket = Sys.getenv('WORKSPACE_BUCKET')
+
+# Copy the file from current workspace to the bucket
+system(paste0("gsutil cp ", my_bucket, "/data/", name_of_file_in_bucket, " ."), intern=T)
+
+# Load the file into a dataframe
+load(paste0(name_of_file_in_bucket))
+```
+
+# Review
+```{r}
+cat("Found", length(combos$remove), "columns that are linear duplicates.\n")
+combos
+colnames(df)[combos$remove]
+```
+
+# Pearson
+```{r}
+# Get pairwise pearson correlation
+system.time({
+cor_matrix = cor(df_corr_check, use = "pairwise.complete.obs", method = "pearson")
+    })
+```
+
+
+```{r}
+# Visualize
+options(repr.plot.width = 12, repr.plot.height = 12)
+corrplot(cor_matrix, method = "color", type = "lower", tl.cex = 0.8, tl.col = "black")
+```
+
+

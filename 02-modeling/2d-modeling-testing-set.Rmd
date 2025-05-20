@@ -49,7 +49,7 @@ packages = c('tidyverse', 'haven', 'qgcomp', 'dplyr', 'ggplot2', 'moments',
              'knitr', 'infotheo', 'igraph', 'ggraph', 'lubridate', 'zoo', 
              'ggridges', 'slider', 'stats', 'reshape2', 'broom', 'gridExtra',
              'modelsummary', 'sandwich', 'tidyverse', 'igraph', 'ggraph', 
-             'arrow', 'patchwork', 'clubSandwich', 'scales')
+             'arrow', 'patchwork', 'clubSandwich', 'scales', 'kableExtra')
 
 # Call the package_install function 
 package_install(packages)
@@ -226,9 +226,9 @@ check_policy_ranges = function(data) {
 
 ```{r}
 # Initialize windows
-period_keys <- c("20200412_20200523", "20200322_20200523", "20200315_20200627")
-suffixes <-c("_April_12_May_23", "_March_22_May_23", "_March_15_June_27")
-stringency_keys <- c("april_12_may_23", "march_22_may_23", "march_15_june_30")
+period_keys <- c("20200315_20200627", "20200322_20200523", "20200412_20200523")
+suffixes <-c("_March_15_June_27", "_March_22_May_23", "_April_12_May_23")
+stringency_keys <- c("march_15_june_30", "march_22_may_23", "april_12_may_23")
 
 results_list <- list()
 
@@ -930,7 +930,7 @@ for (i in seq_along(period_keys)) {
   df_qgcomp_test <-  qgcomp.test.eval(object = qgcomp_all_components,
                    test_data = test_data_df,
                    observation_wt_col =c("observation_wt"),
-                   cluster_col = c("observation_wt"))
+                   cluster_col = c("RegionName"))
   ## Add columns
   df_qgcomp_test$components <- "all_components"
   
@@ -1027,7 +1027,7 @@ for (i in seq_along(period_keys)) {
   df_qgcomp_test <-  qgcomp.test.eval(object = qgcomp_positive_components,
                    test_data = test_data_df,
                    observation_wt_col = c("observation_wt"),
-                   cluster_col = c("observation_wt"))
+                   cluster_col = c("RegionName"))
   ## Add columns
   df_qgcomp_test$components <- "pos_components"
   
@@ -1105,28 +1105,82 @@ for (i in seq_along(period_keys)) {
   
 }
 
+## Store all results
 all_results <- rbindlist(results_list)
+
+## Add ci column
+all_results <- all_results %>%
+  mutate(ci = paste0("(", 
+                     scales::number(lower_ci, accuracy = 0.001), 
+                     ", ", 
+                     scales::number(upper_ci, accuracy = 0.001), 
+                     ")")
+         )
+
+## View
+all_results
 ```
+
+
+
+
+
+
+
 
 
 
 ```{r}
-all_results <- all_results %>%
-  mutate(ci = paste0("(", round(lower_ci, 2), ", ", round(upper_ci, 2), ")"))
+# Create kable view
 
-
-## View
-for (window in unique(all_results$exposure_window)) {
-  
-  cat("\n### Exposure Window:", window, "\n\n")
-  
+## Create list of data frames for each window
+window_dfs <- lapply(unique(all_results$exposure_window), function(window) {
   all_results %>%
     filter(exposure_window == window) %>%
-    select(components, ci, beta) %>%
-    kable(digits = 2, format = "html", booktabs = TRUE) %>%
-    kable_styling(full_width = FALSE, font_size = 14) %>%
-    print()
-}
+    select(components, beta, ci, p_val) %>%
+    rename_with(~ paste0(., "_window_", window), -components)
+})
 
+## Combine side by side 
+final_df <- reduce(window_dfs, left_join, by = c("components"))
+
+## Save as kable
+result_df_kable <- final_df %>%
+  knitr::kable(., digits = 3, 
+               booktabs = TRUE, 
+               format = "html", 
+               caption = paste0("Quantile gcomp test set results")) %>%
+  kable_styling(font_size = 15, fixed_thead = T, bootstrap_options = c("striped", "hover"))
+
+print(result_df_kable)
+
+### Save locally
+save_kable(result_df_kable, paste0("qgcomp_test_set_results.html"))
 ```
 
+```{r}
+# SAVE IN BUCKET
+
+file_to_save <- copy(result_df_kable)
+
+# Replace with THE NAME of the file you're going to store in the bucket (don't delete the quotation marks)
+destination_filename = 'qgcomp_test_set_results.html'
+
+########################################################################
+##
+################# DON'T CHANGE FROM HERE ###############################
+##
+########################################################################
+
+# store the dataframe in current workspace
+save_kable(file_to_save, destination_filename)
+
+# Get the bucket name
+my_bucket = Sys.getenv('WORKSPACE_BUCKET')
+
+# Copy the file from current workspace to the bucket
+system(paste0("gsutil cp ./", destination_filename, " ", my_bucket, "/data/"), intern=T)
+
+# Check if file is in the bucket
+system(paste0("gsutil ls ", my_bucket, "/data/*.html"), intern=T)
+```

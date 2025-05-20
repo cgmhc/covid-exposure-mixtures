@@ -1,7 +1,5 @@
 
-# Function to evaluate qgcomp on test data
-
-qgcomp.test.eval <- function(object, test_data, observation_wt_col){
+qgcomp.test.eval <- function(object, test_data, observation_wt_col, cluster_col){
   
   ## Check class
   if (inherits(object, "qgcompfit")) {
@@ -15,10 +13,15 @@ qgcomp.test.eval <- function(object, test_data, observation_wt_col){
     stop("test_data must be a data.frame.")
   }
   
-  # ## Check if observation_wt_col is a non-empty string of length 1
-  # if (!is.character(observation_wt_col) || length(observation_wt_col) != 1 || observation_wt_col == "") {
-  #   stop("observation_wt_col must be a non-empty character vector of length 1.")
-  # }
+  ## Check if observation_wt_col is a non-empty string of length 1
+  if (!is.character(observation_wt_col) || length(observation_wt_col) != 1 || observation_wt_col == "") {
+    stop("observation_wt_col must be a non-empty character vector of length 1.")
+  }
+  
+  ## Check if cluster_col is a non-empty string of length 1
+  if (!is.character(cluster_col) || length(cluster_col) != 1 || cluster_col == "") {
+    stop("cluster_col must be a non-empty character vector of length 1.")
+  }
   
   ## Extract weights
   training_model_wts <- c(object$pos.weights, object$neg.weights)
@@ -36,26 +39,33 @@ qgcomp.test.eval <- function(object, test_data, observation_wt_col){
   formula_str <- paste0(lhs, "~", "test_target_mix" , "+" , rhs)
   formula_str
   
-  length(test_data$test_target_mix)
-  length(test_data)
-  
   ## Model lm
-  model_test <- lm(data = test_data,formula = formula_str, weights = observation_wt)
+  model_test <- lm(data = test_data,formula = formula_str, weights = get(observation_wt_col))
   
-  ## extract beta coefficient and SE for test_target_mix
-  mix_coeff <- unname(model_test$coefficients["test_target_mix"])
+  ## Cluster Robust
+  cluster_var <- test_data[[cluster_col]]
+  robust_results <- clubSandwich::coef_test(model_test, 
+                                            vcov = "CR2", 
+                                            cluster = cluster_var,
+                                            test = "Satterthwaite", 
+                                            coefs = "test_target_mix")
   
-  ## Cluster robust adjustment for SE
-  mix_se <-  broom::tidy(model_test)[[2, "std.error"]]
   
-  ## Create dataframe to return
+  ## extract robust beta coefficient, p and SE for test_target_mix
+  mix_coeff <- robust_results$beta
+  mix_p_val <- robust_results$p_Satt
+  mix_se <- robust_results$SE
+  mix_lower_ci <- mix_coeff - qnorm(0.975) * robust_results$SE
+  mix_upper_ci <- mix_coeff + qnorm(0.975) * robust_results$SE
+  
   df <- data.frame(
     beta = mix_coeff,
-    std_error = mix_se
+    p_val = mix_p_val,
+    std_error = mix_se,
+    lower_ci = mix_lower_ci,
+    upper_ci = mix_upper_ci
   )
   
-  df$lower_ci <- df$beta - qnorm(0.975) * df$std_error
-  df$upper_ci <- df$beta + qnorm(0.975) * df$std_error
   
   return(df)
   

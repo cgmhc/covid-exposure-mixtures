@@ -40,7 +40,8 @@ qgcomp.test.eval <- function(object, test_data, observation_wt_col, cluster_col)
   formula_str
   
   ## Model lm
-  model_test <- lm(data = test_data,formula = formula_str, weights = get(observation_wt_col))
+  # model_test <- lm(data = test_data,formula = formula_str, weights = (observation_wt_col))
+  model_test <- eval(substitute(lm(formula = formula_str, data = test_data, weights = W), list(W = as.name(observation_wt_col))))
   
   ## Cluster Robust
   cluster_var <- test_data[[cluster_col]]

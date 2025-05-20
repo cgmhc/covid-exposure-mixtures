@@ -49,7 +49,7 @@ packages = c('tidyverse', 'haven', 'qgcomp', 'dplyr', 'ggplot2', 'moments',
              'knitr', 'infotheo', 'igraph', 'ggraph', 'lubridate', 'zoo', 
              'ggridges', 'slider', 'stats', 'reshape2', 'broom', 'gridExtra',
              'modelsummary', 'sandwich', 'tidyverse', 'igraph', 'ggraph', 
-             'arrow', 'patchwork')
+             'arrow', 'patchwork', 'clubSandwich', 'scales')
 
 # Call the package_install function 
 package_install(packages)
@@ -59,6 +59,7 @@ package_install(packages)
 ```{r}
 source(here::here("2d_qgcomp_custom.R"))
 ```
+
 
 
 # Load data
@@ -225,10 +226,9 @@ check_policy_ranges = function(data) {
 
 ```{r}
 # Initialize windows
-period_keys <- c("20200412_20200523" )
-suffixes <-c("_April_12_May_23")
-stringency_keys <- c("april_12_may_23")
-
+period_keys <- c("20200412_20200523", "20200322_20200523", "20200315_20200627")
+suffixes <-c("_April_12_May_23", "_March_22_May_23", "_March_15_June_27")
+stringency_keys <- c("april_12_may_23", "march_22_may_23", "march_15_june_30")
 
 results_list <- list()
 
@@ -929,7 +929,8 @@ for (i in seq_along(period_keys)) {
   ## Evaluate on test set
   df_qgcomp_test <-  qgcomp.test.eval(object = qgcomp_all_components,
                    test_data = test_data_df,
-                   observation_wt_col = "observation_wt")
+                   observation_wt_col =c("observation_wt"),
+                   cluster_col = c("observation_wt"))
   ## Add columns
   df_qgcomp_test$components <- "all_components"
   
@@ -1025,7 +1026,8 @@ for (i in seq_along(period_keys)) {
   ## Evaluate on test set
   df_qgcomp_test <-  qgcomp.test.eval(object = qgcomp_positive_components,
                    test_data = test_data_df,
-                   observation_wt_col = "observation_wt")
+                   observation_wt_col = c("observation_wt"),
+                   cluster_col = c("observation_wt"))
   ## Add columns
   df_qgcomp_test$components <- "pos_components"
   
@@ -1087,25 +1089,44 @@ for (i in seq_along(period_keys)) {
   ## Evaluate on test set
   df_qgcomp_test <-  qgcomp.test.eval(object = qgcomp_negative_components,
                    test_data = test_data_df,
-                   observation_wt_col = "observation_wt")
+                   observation_wt_col = "observation_wt",
+                   cluster_col = "RegionName")
   ## Add columns
   df_qgcomp_test$components <- "neg_components"
   
   ## Add to main results
   result_df <- rbind(result_df, df_qgcomp_test)
   
-  ## Add to main result list
+  ## Add column for window
+  result_df$exposure_window <- stringency_keys[i]
   
+  ## Add to main result list
   results_list[[stringency_keys[i]]] <- result_df
   
 }
 
-results_list
+all_results <- rbindlist(results_list)
 ```
 
 
 
 ```{r}
-df
+all_results <- all_results %>%
+  mutate(ci = paste0("(", round(lower_ci, 2), ", ", round(upper_ci, 2), ")"))
+
+
+## View
+for (window in unique(all_results$exposure_window)) {
+  
+  cat("\n### Exposure Window:", window, "\n\n")
+  
+  all_results %>%
+    filter(exposure_window == window) %>%
+    select(components, ci, beta) %>%
+    kable(digits = 2, format = "html", booktabs = TRUE) %>%
+    kable_styling(full_width = FALSE, font_size = 14) %>%
+    print()
+}
+
 ```
 

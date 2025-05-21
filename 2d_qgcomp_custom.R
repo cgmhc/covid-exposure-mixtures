@@ -1,5 +1,5 @@
 
-qgcomp.test.eval <- function(object, test_data, observation_wt_col, cluster_col){
+qgcomp.test.eval <- function(object, test_data, observation_wt_col, cluster_col, cluster_robust_method = "vcovCR"){
   
   ## Check class
   if (inherits(object, "qgcompfit")) {
@@ -23,6 +23,14 @@ qgcomp.test.eval <- function(object, test_data, observation_wt_col, cluster_col)
     stop("cluster_col must be a non-empty character vector of length 1.")
   }
   
+  ## Check if cluster_col is a non-empty string of length 1
+  if (!is.character(cluster_robust_method) || length(cluster_robust_method) != 1 || cluster_col == "") {
+    stop("cluster_col must be a non-empty character vector of length 1.")
+  }
+  
+  
+  
+  
   ## Extract weights
   training_model_wts <- c(object$pos.weights, object$neg.weights)
   
@@ -43,22 +51,47 @@ qgcomp.test.eval <- function(object, test_data, observation_wt_col, cluster_col)
   # model_test <- lm(data = test_data,formula = formula_str, weights = (observation_wt_col))
   model_test <- eval(substitute(lm(formula = formula_str, data = test_data, weights = W), list(W = as.name(observation_wt_col))))
   
-  ## Cluster Robust
-  cluster_var <- test_data[[cluster_col]]
-  robust_results <- clubSandwich::coef_test(model_test, 
-                                            vcov = "CR2", 
-                                            cluster = cluster_var,
-                                            test = "Satterthwaite", 
-                                            coefs = "test_target_mix")
   
+  # Cluster Robust Estimation
+  if(cluster_robust_method == "vcovCR")
+  {
+    ## Cluster Robust CR2
+    ### Get estimates
+    cluster_var <- test_data[[cluster_col]]
+    robust_cr2 <- clubSandwich::coef_test(model_test, 
+                                          vcov = "CR2", 
+                                          cluster = cluster_var,
+                                          test = "Satterthwaite", 
+                                          coefs = "test_target_mix")
+    
+    
+    ### Extract robust beta coefficient, p and SE for test_target_mix
+    mix_coeff <- robust_cr2$beta
+    mix_p_val <- robust_cr2$p_Satt
+    mix_se <- robust_cr2$SE
+    mix_lower_ci <- mix_coeff - qnorm(0.975) * mix_se
+    mix_upper_ci <- mix_coeff + qnorm(0.975) * mix_se
+    
+  } else if (cluster_robust_method == "vcovCL"){
+    
+    ## Cluster Robust CL
+    ### Get estimates
+    cluster_var <- test_data[[cluster_col]]
+    cl_vcov <- sandwich::vcovCL(model_test, cluster = cluster_var, type = "HC1")
+    robust_cl <- lmtest::coeftest(model_test, vcov. = cl_vcov)
+    
+    ### Extract robust beta coefficient, p and SE for test_target_mix
+    mix_coeff <- robust_cl["test_target_mix", "Estimate"]
+    mix_p_val <- robust_cl["test_target_mix", "Pr(>|t|)"]
+    mix_se <- robust_cl["test_target_mix", "Std. Error"]
+    mix_lower_ci <- mix_coeff - qnorm(0.975) * mix_se
+    mix_upper_ci <- mix_coeff + qnorm(0.975) * mix_se
+    
+  } else {
+    stop("Select suitable method from vcovCR or vcovCL")
+  }
   
-  ## extract robust beta coefficient, p and SE for test_target_mix
-  mix_coeff <- robust_results$beta
-  mix_p_val <- robust_results$p_Satt
-  mix_se <- robust_results$SE
-  mix_lower_ci <- mix_coeff - qnorm(0.975) * robust_results$SE
-  mix_upper_ci <- mix_coeff + qnorm(0.975) * robust_results$SE
-  
+  # Output df
   df <- data.frame(
     beta = mix_coeff,
     p_val = mix_p_val,

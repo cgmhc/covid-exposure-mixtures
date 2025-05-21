@@ -930,7 +930,8 @@ for (i in seq_along(period_keys)) {
   df_qgcomp_test <-  qgcomp.test.eval(object = qgcomp_all_components,
                    test_data = test_data_df,
                    observation_wt_col =c("observation_wt"),
-                   cluster_col = c("RegionName"))
+                   cluster_col = c("RegionName"),
+                   cluster_robust_method = "vcovCR")
   ## Add columns
   df_qgcomp_test$components <- "all_components"
   
@@ -1027,7 +1028,8 @@ for (i in seq_along(period_keys)) {
   df_qgcomp_test <-  qgcomp.test.eval(object = qgcomp_positive_components,
                    test_data = test_data_df,
                    observation_wt_col = c("observation_wt"),
-                   cluster_col = c("RegionName"))
+                   cluster_col = c("RegionName"),
+                   cluster_robust_method = "vcovCR")
   ## Add columns
   df_qgcomp_test$components <- "pos_components"
   
@@ -1090,7 +1092,8 @@ for (i in seq_along(period_keys)) {
   df_qgcomp_test <-  qgcomp.test.eval(object = qgcomp_negative_components,
                    test_data = test_data_df,
                    observation_wt_col = "observation_wt",
-                   cluster_col = "RegionName")
+                   cluster_col = "RegionName",
+                   cluster_robust_method = "vcovCR")
   ## Add columns
   df_qgcomp_test$components <- "neg_components"
   
@@ -1155,7 +1158,7 @@ result_df_kable <- final_df %>%
 print(result_df_kable)
 
 ### Save locally
-save_kable(result_df_kable, paste0("qgcomp_test_set_results.html"))
+save_kable(result_df_kable, paste0("qgcomp_test_set_results_CR.html"))
 ```
 
 ```{r}
@@ -1164,7 +1167,7 @@ save_kable(result_df_kable, paste0("qgcomp_test_set_results.html"))
 file_to_save <- copy(result_df_kable)
 
 # Replace with THE NAME of the file you're going to store in the bucket (don't delete the quotation marks)
-destination_filename = 'qgcomp_test_set_results.html'
+destination_filename = 'qgcomp_test_set_results_CR.html'
 
 ########################################################################
 ##

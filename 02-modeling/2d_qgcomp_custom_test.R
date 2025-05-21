@@ -1077,25 +1077,63 @@ length(test_data)
 
 ## Model lm
 model_test <- eval(substitute(lm(formula = formula_str, data = test_data, weights = W), list(W = as.name(observation_wt_col))))
+summary(model_test)
 
-model_test
+# Cluster Robust Errors
+## Check counts
+cluster_counts <- test_data %>%
+  count(RegionName) %>%
+  pull(n)
 
-## Cluster Robust
-cluster_var <- test_data[[cluster_col]]
-robust_results <- clubSandwich::coef_test(model_test, 
-                            vcov = "CR2", 
-                            cluster = cluster_var,
-                            test = "Satterthwaite", 
-                            coefs = "test_target_mix")
+## Summary statistics
+summary(cluster_counts)      
+sd(cluster_counts)           
+IQR(cluster_counts)         
+max(cluster_counts) / min(cluster_counts)
 
+cluster_robust_method = "vcovCL"
 
-## extract robust beta coefficient, p and SE for test_target_mix
-mix_coeff <- robust_results$beta
-mix_p_val <- robust_results$p_Satt
-mix_se <- robust_results$SE
-mix_lower_ci <- mix_coeff - qnorm(0.975) * robust_results$SE
-mix_upper_ci <- mix_coeff + qnorm(0.975) * robust_results$SE
+# Cluster Robust Estimation
+if(cluster_robust_method == "vcovCR")
+{
+  ## Cluster Robust CR2
+  ### Get estimates
+  cluster_var <- test_data[[cluster_col]]
+  robust_cr2 <- clubSandwich::coef_test(model_test, 
+                                        vcov = "CR2", 
+                                        cluster = cluster_var,
+                                        test = "Satterthwaite", 
+                                        coefs = "test_target_mix")
+  
+  
+  ### Extract robust beta coefficient, p and SE for test_target_mix
+  mix_coeff <- robust_cr2$beta
+  mix_p_val <- robust_cr2$p_Satt
+  mix_se <- robust_cr2$SE
+  mix_lower_ci <- mix_coeff - qnorm(0.975) * mix_se
+  mix_upper_ci <- mix_coeff + qnorm(0.975) * mix_se
+  
+} else if (cluster_robust_method == "vcovCL"){
+  
+  ## Cluster Robust CL
+  ### Get estimates
+  cluster_var <- test_data[[cluster_col]]
+  cl_vcov <- sandwich::vcovCL(model_test, cluster = ~cluster_var, type = "HC1")
+  robust_cl <- lmtest::coeftest(model_test, vcov. = cl_vcov)
+  
+  ### Extract robust beta coefficient, p and SE for test_target_mix
+  idx <- which(rownames(robust_cl) == "test_target_mix")
+  mix_coeff <- robust_cl["test_target_mix", "Estimate"]
+  mix_p_val <- robust_cl["test_target_mix", "Pr(>|t|)"]
+  mix_se <- robust_cl["test_target_mix", "Std. Error"]
+  mix_lower_ci <- mix_coeff - qnorm(0.975) * mix_se
+  mix_upper_ci <- mix_coeff + qnorm(0.975) * mix_se
+  
+} else {
+  stop("Select suitable method from vcovCR or vcovCL")
+}
 
+# Output df
 df <- data.frame(
   beta = mix_coeff,
   p_val = mix_p_val,
@@ -1104,5 +1142,12 @@ df <- data.frame(
   upper_ci = mix_upper_ci
 )
 
+# Function Test
+source(here::here("2d_qgcomp_custom.R"))
+df_qgcomp_test <-  qgcomp.test.eval(object = qgcomp_all_components,
+                                    test_data = test_data_df,
+                                    observation_wt_col = "observation_wt",
+                                    cluster_col = "RegionName",
+                                    cluster_robust_method = "vcovCR")
 
-df
+df_qgcomp_test

@@ -25,7 +25,7 @@ qgcomp.model.mixture <- function(object,
   wts <- c(object$pos.weights, object$neg.weights)
   
   ## Multiply exposure training weights with exposure columns
-  data_eval$mixture_score <- rowSums(wts*data_eval[, names(wts)])
+  data_eval$mixture_score <- rowSums(wts*data_eval[, names(wts), drop = FALSE])
   
   print("Summary of test mixture score column")
   print(summary(data_eval$mixture_score))
@@ -101,14 +101,30 @@ qgcomp.hicc <- function(fit.object,
       list(CLUSTER = as.name(cluster_col))
     )
   )
-  icc_result <- performance::icc(lmer_model)
   
-  df <- data.frame(
-    hc_p_val = hc_result$p.value,
-    icc_p_val = icc_result$ICC_unadjusted,
-    icc_p_val_adj = icc_result$ICC_adjusted,
-    row.names = NULL
-  )
+  # Check for singular model
+  if(lme4::isSingular(lmer_model, tol = 1e-4)){
+    message("Model is singular. setting ICC scores to 0")
+    
+    df <- data.frame(
+      hc_p_val = hc_result$p.value,
+      icc = 0,
+      icc_adj = 0,
+      row.names = NULL
+    )
+    
+  } else {
+    
+    icc_result <- performance::icc(lmer_model)
+    
+    df <- data.frame(
+      hc_p_val = hc_result$p.value,
+      icc = icc_result$ICC_unadjusted,
+      icc_adj = icc_result$ICC_adjusted,
+      row.names = NULL
+    )
+    
+  }
   
   return(df)
 }

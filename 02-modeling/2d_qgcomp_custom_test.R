@@ -1863,3 +1863,220 @@ result <- data.frame(
 )
 
 print(result)
+
+
+# New Function Test with Robust SE ---------------
+
+## STEP 1: GET MODELS -----------
+# Load necessary libraries
+library(caret)
+
+# Load the Iris dataset
+data(iris)
+
+# Set seed for reproducibility
+set.seed(123)
+
+# Perform stratified 80-20 split (80% for training, 20% for testing)
+train_index <- createDataPartition(iris$Species, p = 0.8, list = FALSE)
+
+# Split data into train and test sets
+train_data <- iris[train_index, ]
+test_data <- iris[-train_index, ]
+
+# View the dimensions of the train and test sets
+dim(train_data)
+dim(test_data)
+
+# Fit model on training data
+glm_train <- glm(Sepal.Length ~ Sepal.Width + Petal.Length + Petal.Width + Species,
+                 data = train_data, family = gaussian())
+
+# Cluster variable: Species
+cluster_train <- train_data$Species
+
+X_test <- model.matrix(Sepal.Length ~ Sepal.Width + Petal.Length + Petal.Width + Species,
+                       data = test_data, family = gaussian())
+
+
+## STEP 2: APPLY ESTFUN (from sandwich) -----------------
+x = copy(glm_train) # NOTE paramter
+
+# Get predictions using training beta
+eta_test <- X_test %*% coef(glm_train)
+mu_test <- eta_test  # For Gaussian identity link
+
+# Compute residuals using test outcomes
+res_test <- test_data$Sepal.Length - mu_test
+
+# For Gaussian, weights = 1
+wres_test <- as.vector(res_test) * 1
+
+# Use training dispersion if needed
+dispersion <- summary(glm_train)$dispersion
+
+# Final result
+rval_test <- wres_test * X_test / dispersion
+
+## STEP 3: APPLY MEATCL (from sandwich) --------------
+cluster <- test_data$Species # NOTE parameter
+type <- "HC1" # NOTE parameter
+multi0 <- FALSE # NOTE parameter
+cadjust <- TRUE # NOTE parameter
+
+ef <- rval_test
+k <- NCOL(ef)  # number of coefficients
+n <- NROW(ef)  # number of test observations
+
+rval <- matrix(0, nrow = k, ncol = k,
+               dimnames = list(colnames(ef), colnames(ef)))
+
+## cluster can either be supplied explicitly or
+## be an attribute of the model...FIXME: other specifications?
+if (is.null(cluster)) cluster <- attr(x, "cluster")
+
+## resort to cross-section if no clusters are supplied
+if (is.null(cluster)) cluster <- 1L:n
+
+## collect 'cluster' variables in a data frame
+cluster <- as.data.frame(test_data$Species)
+names(cluster) <- "Species"
+
+## handle omitted or excluded observations
+if((n != NROW(cluster)) && !is.null(x$na.action) && (class(x$na.action) %in% c("exclude", "omit"))) {
+  cluster <- cluster[-x$na.action, , drop = FALSE]
+}
+
+if(NROW(cluster) != n) stop("number of observations in 'cluster' and 'estfun()' do not match")
+
+## catch NAs in cluster -> need to be addressed in the model object by the user
+if(anyNA(cluster)) stop("cannot handle NAs in 'cluster': either refit the model without the NA observations in 'cluster' or impute the NAs")
+
+## for multi-way clustering: set up interaction patterns
+p <- NCOL(cluster)
+if (p > 1L) {
+  cl <- lapply(1L:p, function(i) combn(1L:p, i, simplify = FALSE))
+  cl <- unlist(cl, recursive = FALSE)
+  sign <- sapply(cl, function(i) (-1L)^(length(i) + 1L))    
+  paste_ <- function(...) paste(..., sep = "_")
+  for (i in (p + 1L):length(cl)) {
+    cluster <- cbind(cluster, Reduce(paste_, unclass(cluster[, cl[[i]] ]))) ## faster than: interaction()
+  }
+  if(multi0) cluster[[length(cl)]] <- 1L:n
+} else {
+  cl <- list(1)
+  sign <- 1
+}
+
+
+## number of clusters (and cluster interactions)
+g <- sapply(1L:length(cl), function(i) {
+  if(is.factor(cluster[[i]])) {
+    length(levels(cluster[[i]]))
+  } else {
+    length(unique(cluster[[i]]))
+  }
+})
+
+## type of model
+is_lm <- function(object) class(object)[1L] == "lm"
+is_glm <- function(object) class(object)[1L] == "glm"
+
+## type of bias correction
+if(is.null(type)) {
+  type <- if(is_lm(x)) "HC1" else "HC0"
+}
+type <- match.arg(type, c("HC", "HC0", "HC1", "HC2", "HC3"))
+if(type == "HC") type <- "HC0"
+
+## SKIP HC2 AND HC3 block
+if(FALSE){
+  if(type %in% c("HC2", "HC3"))
+  {
+    if(any(g == n)) h <- hatvalues(x)
+    
+    if(!all(g == n)) {
+      if(!(is_lm(x) || is_glm(x))) warning("clustered HC2/HC3 are only applicable to (generalized) linear regression models")
+      
+      ## regressor matrix
+      X <- model.matrix(x)
+      if(any(alias <- is.na(coef(x)))) X <- X[, !alias, drop = FALSE]
+      attr(X, "assign") <- NULL
+      
+      ## working weights
+      w <- weights(x, "working")
+      
+      ## (X'X)^(-1)
+      XX1 <- if(is.null(w)) chol2inv(qr.R(qr(X))) else chol2inv(qr.R(qr(X * sqrt(w))))
+      
+      ## working residuals
+      res <- rowMeans(ef/X, na.rm = TRUE)
+      res[apply(abs(ef) < .Machine$double.eps, 1L, all)] <- 0
+    }
+  }
+}
+
+## add OPG for each cluster-aggregated estfun
+for (i in 1L:length(cl)) {
+  ## estimating functions for aggregation by i-th clustering variable
+  efi <- ef
+  
+  ## add cluster adjustment g/(g - 1) or not?
+  ## only exception: HC0 adjustment for multiway clustering at "last interaction"
+  adj <- if(multi0 & (i == length(cl))) {
+    if(type == "HC1") (n - k)/(n - 1L) else 1
+  } else {
+    if(cadjust) g[i]/(g[i] - 1L) else 1
+  }
+  
+  ## aggregate within cluster levels      
+  efi <- if(g[i] < n) apply(efi, 2L, rowsum, cluster[[i]]) else efi
+  
+  ## aggregate across cluster variables
+  rval <- rval + sign[i] * adj * crossprod(efi)/n
+  
+  
+}
+
+## HC1 adjustment with residual degrees of freedom: (n - 1)/(n - k)
+if(type == "HC1") rval <- (n - 1L)/(n - k) * rval
+
+
+rval
+
+## STEP 4: APPLY SANDWICH. (from sandwich) -------------
+
+### GET BREAD --------------------
+
+if(is.list(x) && !is.null(x$na.action)) class(x$na.action) <- "omit"
+## get wres_test
+eta_test <- X_test %*% coef(glm_train)
+mu_test <- eta_test  # For Gaussian identity link
+res_test <- test_data$Sepal.Length - mu_test
+wres_test <- as.vector(res_test) * 1
+
+## get cov.unscaled for test set
+cov.unscaled.test <- solve(t(X_test) %*% X_test)
+
+## Get dispersion (for GLM it is not 1)
+dispersion_test <- sum(wres_test^2) / sum(weights(x, "working"))
+
+# Step 2: Compute total degrees of freedom (df1 = residual df, df2 = # of coefficients)
+df_total <- sum(summary(x)$df[1:2])
+
+# Step 3: Multiply everything together
+bread_test <- cov.unscaled.test * df_total * dispersion_test
+
+### COMPLETE SANDWICH ---------------
+
+if(is.list(x) && !is.null(x$na.action)) class(x$na.action) <- "omit"
+
+if(FALSE){ #not using this code
+  if(is.function(bread.)) bread. <- bread.(x)
+  if(is.function(meat.)) meat. <- meat.(x, ...)
+}
+
+n_test <- NROW(rval_test) # same as nrow(X_test)
+vcovCL_test_manual <- (1/n_test * (bread_test %*% rval %*% bread_test))
+vcovCL_test_manual
+

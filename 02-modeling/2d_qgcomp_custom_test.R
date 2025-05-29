@@ -1,3 +1,5 @@
+# Load Libraries ------------------------
+
 # Install specific versions
 install.packages("data.table")  # Will install latest version (1.16.4)
 install.packages("rlang")       # Will install latest version (1.1.4)
@@ -29,8 +31,8 @@ packages = c('tidyverse', 'haven', 'qgcomp', 'dplyr', 'ggplot2', 'moments',
              'naniar', 'VIM', 'missForest', 'tidymodels', 'purrr', 'gridExtra', 
              'knitr', 'infotheo', 'igraph', 'ggraph', 'lubridate', 'zoo', 
              'ggridges', 'slider', 'stats', 'reshape2', 'broom', 'gridExtra',
-             'modelsummary', 'sandwich', 'tidyverse', 'igraph', 'ggraph', 
-             'arrow', 'patchwork')
+             'modelsummary', 'sandwich', 'igraph', 'ggraph', 
+             'arrow', 'patchwork', 'lme4', 'performance')
 
 # Call the package_install function 
 package_install(packages)
@@ -42,11 +44,8 @@ package_install(packages)
 # replace 'test.csv' with the name of the file in your google bucket (don't delete the quotation marks)
 name_of_file_in_bucket = 'mvp_2d_0725.csv'
 
-########################################################################
-##
-################# DON'T CHANGE FROM HERE ###############################
-##
-########################################################################
+
+# DON'T CHANGE FROM HERE
 
 # Get the bucket name
 my_bucket = Sys.getenv('WORKSPACE_BUCKET')
@@ -119,6 +118,8 @@ print(list.files())
 load(exposure_filename)
 
 combined_exposure_data = combined_exposure_data_clean
+
+# Preprocessing ----------------------------------------------------------------
 
 # Function to process and rename exposure data
 process_exposure_data = function(period_key, suffix) {
@@ -806,13 +807,9 @@ ggplot(test_data, aes(x = gad_score_july)) +
 train_data_df = as.data.frame(train_data)
 test_data_df  = as.data.frame(test_data)
 
-##-----------------------------------------
-# Generating exposure mixture models with individual exposures (essentially GLM)
-##-----------------------------------------
+# Generating exposure mixture models with individual exposures (essentially GLM)--------------
 
-#----------------------------
-### qgcomp.glm.boot models (including individual exposures)
-#----------------------------
+#qgcomp.glm.boot models (including individual exposures)
 
 # Assumes a linear and additive relationship between the exposures and the outcome on the link function scale
 # e.g. log rate for count outcomes 
@@ -835,9 +832,8 @@ test_data_df  = as.data.frame(test_data)
 
 # April 5 - May 30 (i.e. week start of May 24) “early” exposure, July 2020 outcome
 
-#----------------------------
-# EXPOSURE 1 - SCHOOL CLOSING 
-#----------------------------
+# EXPOSURE 1 - SCHOOL CLOSING----------------------------------------------------------------------
+
 
 qgcomp_weights_train = train_data_df$observation_wt_trim 
 qgcomp_weights_test  = test_data_df$observation_wt_trim 
@@ -861,10 +857,11 @@ C1M_coefficients = qgcomp.glm.noboot(gad_score_july ~
                                        #including additional covariates used to generate propensity scores
                                        C1M_School_closing_April_12_May_23,
                                      expnms = c('C1M_School_closing_April_12_May_23'), 
-                                     data = train_data_df, 
-                                     weights = qgcomp_weights_train,
+                                     data = cope_auo_july_no_miss, 
+                                     weights = qgcomp_weights_total_sample,
                                      q = NULL,
                                      bayes = FALSE) 
+length(coef(C1M_coefficients$fit))
 
 # When we print the qgcomp output, the reported standard error for psi1 (the mixture effect)
 # is calculated from the default model-based variance–covariance matrix.
@@ -896,10 +893,9 @@ C1M_default_p = 2 * pt(abs(C1M_default_t), df = df_model, lower.tail = FALSE)
 cat("Default t-value for psi1:", C1M_default_t, "\n")
 cat("Default p-value for psi1:", C1M_default_p, "\n")
 
-# Cluster-robust error calculations
-#------------------------------------------------------------------------------
+##  Cluster-robust error calculations ------------------------------------------------------------------------------
 # Calculate cluster-robust variance-covariance matrix accounting for RegionName
-C1M_robust_vcov = vcovCL(C1M_coefficients$fit, cluster = train_data_df$RegionName)
+C1M_robust_vcov = vcovCL(C1M_coefficients$fit, cluster = cope_auo_july_no_miss$RegionName)
 
 # Extract the robust standard error for the exposure coefficient
 C1M_robust_se = sqrt(C1M_robust_vcov["C1M_School_closing_April_12_May_23", 
@@ -918,14 +914,348 @@ C1M_robust_p = 2 * pt(abs(C1M_robust_t), df = df_model, lower.tail = FALSE)
 cat("Robust t-value for psi1:", C1M_robust_t, "\n")
 cat("Robust p-value for psi1:", C1M_robust_p, "\n")
 
+## Function Test: Mixture Effect -----------------
+
+object <- copy(C1M_coefficients)
+data_eval <- copy(cope_auo_july_no_miss)
+observation_wt_col= c("observation_wt_trim")
+exposure_names <- c(
+  'C1M_School_closing_April_12_May_23'
+)
 
 
-# Interpret
-## extract beta coefficient and SE for test_target_mix
+object = model_qgcomp
+data_eval = test_data_df
+observation_wt_col= c("observation_wt_trim")
+exposure_names = exposure_names
 
-## Cluster robust adjustment for SE
+## Extract weights
+wts <- c(object$pos.weights, object$neg.weights)
+wts
+
+## Multiply exposure training weights with exposure columns
+data_eval$mixture_score <- rowSums(wts*data_eval[, names(wts), drop = FALSE])
+
+print("Summary of test mixture score column")
+print(summary(data_eval$mixture_score))
+
+# Evaluate effect
+## pull formula from qgcomp
+lhs <- as.character(object$fit$formula)[2]
+rhs <- as.character(object$fit$formula)[3]
+
+## Clean rhs string
+rhs_clean <- gsub("[\n\r]", " ", rhs)       # Replace line breaks with space
+rhs_clean <- gsub("\\s+", " ", rhs_clean) # Collapse multiple spaces
+rhs_clean
+
+## Remove exposure terms: to avoid multicollinearity
+rhs_terms <- strsplit(rhs_clean, " \\+ ")[[1]]
+
+rhs_new <- if (length(rhs_terms[!rhs_terms %in% exposure_names]) > 0) {
+  paste0(" + ", paste(rhs_terms[!rhs_terms %in% exposure_names], collapse = " + "))
+} else {
+  ""
+}
+
+formula_str <- paste0(lhs, "~", "mixture_score" , "+" , rhs_new)
+formula_str
+
+## Model glm
+# model_test <- lm(data = test_data,formula = formula_str, weights = (observation_wt_col))
+model_mix <- eval(substitute(glm(formula = formula_str, family = "gaussian", data = data_eval, weights = W), list(W = as.name(observation_wt_col))))
+model_mix
+
+# Return
+## return object
+eval_object <- list()
+eval_object$model <- copy(model_mix)
+eval_object$new_data <- copy(data_eval)
+
+## Function Test: HICC ---------------------
+fit.object =  model_test
+data = test_data_new
+cluster_col = "RegionName"
 
 
+## Check class
+if (inherits(fit.object, "lm")) {
+  message("This is a lm object.")
+} else {
+  stop("Pass a valid lm object.")
+}
+
+## Check data
+if (is.null(data)){
+  stop("Pass va valid data object")
+}
+
+## Check if cluster_var is a non-empty string of length 1
+if (length(cluster_col) == 0 || is.null(cluster_col) || cluster_col == ""){
+  stop("cluster_col must be non-empty vector of length 1")
+}
+
+
+# Heteroskedasticity test: if pval is significant, need HC correction (Robust SE)
+hc_result <- lmtest::bptest(fit.object) 
+
+# ICC: explains cluster level effects: should be higher than 0.05 (Cluster Robust SE)
+model_formula <- formula(fit.object)
+lmer_model <- eval(
+  substitute(
+    lme4::lmer(update(model_formula, . ~ . + (1 | CLUSTER)), data = data),
+    list(CLUSTER = as.name(cluster_col))
+  )
+)
+
+if(lme4::isSingular(lmer_model, tol = 1e-4)){
+  message("Model is singular. setting ICC scores to 0")
+  
+  df <- data.frame(
+    hc_p_val = hc_result$p.value,
+    icc = 0,
+    icc_adj = 0,
+    row.names = NULL
+  )
+  
+} else {
+  
+  icc_result <- performance::icc(lmer_model)
+  
+  df <- data.frame(
+    hc_p_val = hc_result$p.value,
+    icc = icc_result$ICC_unadjusted,
+    icc_adj = icc_result$ICC_adjusted,
+    row.names = NULL
+  )
+  
+}
+
+
+
+## Function Test: Robust Errors -------------------------------------------
+
+# Init
+fit.object = copy(C1M_coefficients$fit)
+cluster_robust = TRUE
+robust_type= "CR1"
+cluster_var = cope_auo_july_no_miss$RegionName
+exposure_names <- c("C1M_School_closing_April_12_May_23")
+
+## Check class
+if (inherits(fit.object, "lm")) {
+  message("This is a lm object.")
+} else {
+  stop("Pass a valid lm object.")
+}
+
+## Check if robust_type is a non-empty string of length 1
+if (length(robust_type) == 0 || is.null(robust_type)) {
+  stop("robust_type must be a non-empty vector")
+}
+
+## Init types
+HC_types <- c("HC0", "HC1", "HC2", "HC3", "HC4", "HC4m", "HC5")
+CR_types <- c("CR0", "CR1", "CR1S", "CR2", "CR3")
+
+## Check if robust_type in HC types for cluster_robust = FALSE
+if ((cluster_robust == FALSE) & (robust_type %in% CR_types)) {
+  stop("Set cluster_robust to TRUE before proceeding with CR types")
+}
+
+## Check if robust_type is accurate
+if (!(robust_type %in% c(HC_types, CR_types))) {
+  stop("Invalid robust_type. Must be one of: ", paste(c(HC_types, CR_types), collapse = ", "))
+}
+
+## Check if cluster_var is non-empty
+if ((cluster_robust == TRUE) & (length(cluster_var) == 0 || is.null(cluster_var))) {
+  stop("cluster_var must be a non-empty vector when cluster_robust = TRUE")
+}
+
+
+### Robust Estimation --------
+message("Using vcovHC + manual t-test(df = df.residual))")
+hc_vcov <- sandwich::vcovHC(fit.object, type = robust_type)
+
+## Clean: required due to high memory usage
+gc()
+
+## Extract robust beta coefficient, p and SE
+new_coeff <- fit.object$coefficients[exposure_names]     # same as qgcomp object$psi
+new_se <- sqrt(hc_vcov[exposure_names, exposure_names])  # square root of covariance
+new_p_val <- 2 * pt(abs(new_coeff/new_se),         # get tstat by coeff/SE
+                    df = fit.object$df.residual,         # degree of freedom is residual degree of freedom from model object
+                    lower.tail = FALSE)
+new_lower_ci <- new_coeff - qnorm(0.975) * new_se
+new_upper_ci <- new_coeff + qnorm(0.975) * new_se
+
+### Cluster Robust HC -----------
+
+message("Using vcovCL + manual t-test (df = G - 1)")
+cl_vcov <- sandwich::vcovCL(fit.object, cluster = cluster_var, type = robust_type)
+
+## Clean: required due to high memory usage
+gc()
+
+## Extract robust beta coefficient, p and SE
+new_coeff <- fit.object$coefficients[exposure_names]     # same as qgcomp object$psi
+new_se <- sqrt(cl_vcov[exposure_names, exposure_names])  # square root of covariance
+new_p_val <- 2 * pt(abs(new_coeff/new_se),         # get stat by coeff/SE
+                    df = length(unique(cluster_var)) - 1, # degree of freedom is number of clusters - 1
+                    lower.tail = FALSE)
+new_lower_ci <- new_coeff - qnorm(0.975) * new_se
+new_upper_ci <- new_coeff + qnorm(0.975) * new_se
+    
+### Cluster Robust CR ------------
+message("Using vcovCR + manual t-test")
+cl_vcov <- clubSandwich::vcovCR(fit.object, cluster = cluster_var, type = robust_type)
+
+## Clean: required due to high memory usage
+gc()
+
+## Extract robust beta coefficient, p and SE
+new_coeff <- sum(fit.object$coefficients[exposure_names])     # same as qgcomp object$psi
+new_se <- sqrt(sum(cl_vcov[exposure_names, exposure_names, 
+                           drop = FALSE]))                    # square root of covariance
+
+## Satterthwaite calc
+which_beta <- names(coef(fit.object)) %in% exposure_names
+GH_obj <- clubSandwich:::get_GH(fit.object, cl_vcov)          # NOTE: using ::: to access internal function
+P_array <- clubSandwich:::get_P_array(GH_obj)                 # NOTE: using ::: to access internal function
+
+## Get projection
+P_combined <- array(0, dim = c(dim(P_array)[1:2], 1))
+exposure_indices <- which(names(coef(fit.object)) %in% exposure_names)
+for (g in seq_len(dim(P_array)[1])) {
+  for (h in seq_len(dim(P_array)[2])) {
+    P_combined[g, h, 1] <- sum(P_array[g, h, exposure_indices])
+  }
+}
+
+## Get Satterthwaite df for the combined effect
+df_satt <- clubSandwich:::Satterthwaite_df(P_combined)  # NOTE: using ::: to access internal function
+
+## Clean: required due to high memory usage
+gc()
+
+## Continue with p val calculations
+new_p_val <- 2 * pt(abs(new_coeff/new_se),                    # get stat by coeff/SE
+                    df = df_satt,                             # degree of freedom is Satterthwaite df
+                    lower.tail = FALSE)
+new_lower_ci <- new_coeff - qnorm(0.975) * new_se
+new_upper_ci <- new_coeff + qnorm(0.975) * new_se
+
+### Cluster Robust CR + Coef_test ------------------
+message("Using vcovCR + coef_test")
+cl_vcov <- clubSandwich::vcovCR(eval_object$model, cluster = cluster_var, type = robust_type)
+robust_cr2 <- clubSandwich::coef_test(eval_object$model, 
+                                      vcov = cl_vcov,
+                                      test = "Satterthwaite", 
+                                      coefs = c("mixture_score"))
+
+### Clean: required due to high memory usage
+gc()
+
+
+### Extract robust beta coefficient, p and SE
+new_coeff <- robust_cr2$beta
+new_p_val <- robust_cr2$p_Satt
+new_se <- robust_cr2$SE
+new_lower_ci <- new_coeff - qnorm(0.975) * new_se
+new_upper_ci <- new_coeff + qnorm(0.975) * new_se
+
+#### check manual ---------
+message("Using vcovCR + manual t-test")
+cl_vcov <- clubSandwich::vcovCR(eval_object$model, cluster = cluster_var, type = robust_type)
+
+## Clean: required due to high memory usage
+gc()
+
+## Extract robust beta coefficient, p and SE
+new_coeff <- sum(eval_object$model$coefficients[c("mixture_score")])     # same as qgcomp object$psi
+new_se <- sqrt(sum(cl_vcov[c("mixture_score"), c("mixture_score"), 
+                           drop = FALSE]))                    # square root of covariance
+
+## Satterthwaite calc
+which_beta <- names(coef(eval_object$model)) %in% c("mixture_score")
+GH_obj <- clubSandwich:::get_GH(eval_object$model, cl_vcov)          # NOTE: using ::: to access internal function
+P_array <- clubSandwich:::get_P_array(GH_obj)                 # NOTE: using ::: to access internal function
+
+## Get projection
+P_combined <- array(0, dim = c(dim(P_array)[1:2], 1))
+exposure_indices <- which(names(coef(eval_object$model)) %in% c("mixture_score"))
+for (g in seq_len(dim(P_array)[1])) {
+  for (h in seq_len(dim(P_array)[2])) {
+    P_combined[g, h, 1] <- sum(P_array[g, h, exposure_indices])
+  }
+}
+
+## Get Satterthwaite df for the combined effect
+df_satt <- clubSandwich:::Satterthwaite_df(P_combined)  # NOTE: using ::: to access internal function
+
+## Clean: required due to high memory usage
+gc()
+
+## Continue with p val calculations
+new_p_val <- 2 * pt(abs(new_coeff/new_se),                    # get stat by coeff/SE
+                    df = df_satt,                             # degree of freedom is Satterthwaite df
+                    lower.tail = FALSE)
+new_lower_ci <- new_coeff - qnorm(0.975) * new_se
+new_upper_ci <- new_coeff + qnorm(0.975) * new_se
+
+### Output df -------------
+df <- data.frame(
+  beta = new_coeff,
+  p_val = new_p_val,
+  std_error = new_se,
+  lower_ci = new_lower_ci,
+  upper_ci = new_upper_ci,
+  row.names = NULL
+)
+
+df
+
+
+### Check variance matices ---------
+cl_vcov1 <- clubSandwich::vcovCR(eval_object$model, cluster = cluster_var, type = robust_type)
+cl_vcov2 <- clubSandwich::vcovCR(fit.object, cluster = cluster_var, type = robust_type)
+all.equal(cl_vcov1, cl_vcov2)
+
+
+## Function Test: Heteroskedasticity and Intra-Class Correlation Coeff ------------------------
+
+# Init
+object = copy(C1M_coefficients)
+cluster_var = "RegionName"
+exposure_names <- c("C1M_School_closing_April_12_May_23")
+
+# Heteroskedasticity test: if pval is significant, need HC correction (Robust SE)
+hc_result <- lmtest::bptest(object$fit) 
+
+# ICC: explains cluster level effects: should be higher than 0.05 (Cluster Robust SE)
+model_formula <- formula(object$fit)
+lmer_model <- eval(
+  substitute(
+    lme4::lmer(update(model_formula, . ~ . + (1 | CLUSTER)), data = object$fit$data),
+    list(CLUSTER = as.name(cluster_var))
+  )
+)
+icc_result <- performance::icc(lmer_model)
+icc_result$ICC_adjusted
+icc_result$ICC_unadjusted
+
+df <- data.frame(
+  expnms = exposure_names,
+  hc_p_val = hc_result$p.value,
+  icc_p_val = icc_result$ICC_unadjusted,
+  icc_p_val_adj = icc_result$ICC_adjusted,
+  row.names = NULL
+)
+
+df
+
+# EXPOSURE ALL ---------------------------------------------
 # Exploratory: non parametric boostrap it to 1000 iterations. Get 95% CI from distributions. Similar to this quantile(auc_stability, probs = c(0.025, 0.975))
 
 qgcomp_all_components = qgcomp.glm.noboot(gad_score_july ~ 
@@ -957,12 +1287,14 @@ qgcomp_all_components = qgcomp.glm.noboot(gad_score_july ~
                                             'C5M_Close_public_transport_April_12_May_23',
                                             'C6M_Stay_at_home_requirements_April_12_May_23',
                                             'C7M_Restrictions_on_internal_movement_April_12_May_23'), 
-                                          data = train_data_df, 
-                                          weights = qgcomp_weights_train,
+                                          data = cope_auo_july_no_miss, 
+                                          weights = qgcomp_weights_total_sample,
                                           q = NULL,
                                           bayes = FALSE) 
-
 print(qgcomp_all_components)
+
+qgcomp_all_components$fit
+qgcomp_all_components$psi
 
 # Purpose: default vs cluster-robust inference for the overall mixture effect (ψ₁)
 mixture_effect_se = function(qgcomp_fit, cluster = NULL, alpha = 0.05) {
@@ -1025,14 +1357,266 @@ mixture_effect_se = function(qgcomp_fit, cluster = NULL, alpha = 0.05) {
 ## (a) Using region as the clustering unit
 all_exposures_results = mixture_effect_se(
   qgcomp_fit = qgcomp_all_components,
-  cluster    = train_data_df$RegionName  # same vector used in vcovCL
+  cluster    = cope_auo_july_no_miss$RegionName  # same vector used in vcovCL
 )
 print(all_exposures_results)
 
-#-------- Test Set Approximation Function Diagnostics ---------
-# TO DO: function in a file, source letter with source()
-# Mixture on Test Set
+## Function Test: Mixture Effect 1-----------------
 
+object <- copy(qgcomp_all_components)
+data_eval <- copy(cope_auo_july_no_miss)
+observation_wt_col= c("observation_wt")
+exposure_names <- c(
+  'C1M_School_closing_April_12_May_23',
+  'C2M_Workplace_closing_April_12_May_23',
+  'C3M_Cancel_public_events_April_12_May_23',
+  'C4M_Restrictions_on_gatherings_April_12_May_23',
+  'C5M_Close_public_transport_April_12_May_23',
+  'C6M_Stay_at_home_requirements_April_12_May_23',
+  'C7M_Restrictions_on_internal_movement_April_12_May_23')
+
+
+## Extract weights
+wts <- c(object$pos.weights, object$neg.weights)
+
+## Multiply exposure training weights with exposure columns
+data_eval$mixture_score <- rowSums(wts*data_eval[, names(wts)])
+
+print("Summary of test mixture score column")
+print(summary(data_eval$mixture_score))
+
+# Evaluate effect
+## pull formula from qgcomp
+lhs <- as.character(object$fit$formula)[2]
+rhs <- as.character(object$fit$formula)[3]
+
+## Clean rhs string
+rhs_clean <- gsub("[\n\r]", " ", rhs)       # Replace line breaks with space
+rhs_clean <- gsub("\\s+", " ", rhs_clean) # Collapse multiple spaces
+rhs_clean
+
+## Remove exposure terms: to avoid multicollinearity
+rhs_terms <- strsplit(rhs_clean, " \\+ ")[[1]]
+
+rhs_new <- if (length(rhs_terms[!rhs_terms %in% exposure_names]) > 0) {
+  paste0(" + ", paste(rhs_terms[!rhs_terms %in% exposure_names], collapse = " + "))
+} else {
+  ""
+}
+
+formula_str <- paste0(lhs, "~", "mixture_score" , "+" , rhs_new)
+formula_str
+
+## Model glm
+# model_test <- lm(data = test_data,formula = formula_str, weights = (observation_wt_col))
+model_mix <- eval(substitute(glm(formula = formula_str, family = "gaussian", data = data_eval, weights = W), list(W = as.name(observation_wt_col))))
+model_mix
+
+# Return
+## return object
+eval_object <- list()
+eval_object$model <- copy(model_mix)
+eval_object$new_data <- copy(data_eval)
+
+
+
+## Function Test: Robust Errors -------------------------------------------
+
+# Init
+fit.object = copy(qgcomp_all_components$fit)
+cluster_robust = TRUE
+robust_type= "CR1"
+cluster_var = cope_auo_july_no_miss$RegionName
+exposure_names <- c(
+  'C1M_School_closing_April_12_May_23',
+  'C2M_Workplace_closing_April_12_May_23',
+  'C3M_Cancel_public_events_April_12_May_23',
+  'C4M_Restrictions_on_gatherings_April_12_May_23',
+  'C5M_Close_public_transport_April_12_May_23',
+  'C6M_Stay_at_home_requirements_April_12_May_23',
+  'C7M_Restrictions_on_internal_movement_April_12_May_23')
+
+## Check class
+if (inherits(fit.object, "lm")) {
+  message("This is a lm object.")
+} else {
+  stop("Pass a valid lm object.")
+}
+
+## Check if robust_type is a non-empty string of length 1
+if (length(robust_type) == 0 || is.null(robust_type)) {
+  stop("robust_type must be a non-empty vector")
+}
+
+## Init types
+HC_types <- c("HC0", "HC1", "HC2", "HC3", "HC4", "HC4m", "HC5")
+CR_types <- c("CR0", "CR1", "CR1S", "CR2", "CR3")
+
+## Check if robust_type in HC types for cluster_robust = FALSE
+if ((cluster_robust == FALSE) & (robust_type %in% CR_types)) {
+  stop("Set cluster_robust to TRUE before proceeding with CR types")
+}
+
+## Check if robust_type is accurate
+if (!(robust_type %in% c(HC_types, CR_types))) {
+  stop("Invalid robust_type. Must be one of: ", paste(c(HC_types, CR_types), collapse = ", "))
+}
+
+## Check if cluster_var is non-empty
+if ((cluster_robust == TRUE) & (length(cluster_var) == 0 || is.null(cluster_var))) {
+  stop("cluster_var must be a non-empty vector when cluster_robust = TRUE")
+}
+
+
+### Robust Estimation --------
+message("Using vcovHC + manual t-test(df = df.residual))")
+hc_vcov <- sandwich::vcovHC(fit.object, type = robust_type)
+
+## Clean: required due to high memory usage
+gc()
+
+## Extract robust beta coefficient, p and SE
+new_coeff <- fit.object$coefficients[exposure_names]     # same as qgcomp object$psi
+new_se <- sqrt(hc_vcov[exposure_names, exposure_names])  # square root of covariance
+new_p_val <- 2 * pt(abs(new_coeff/new_se),         # get tstat by coeff/SE
+                    df = fit.object$df.residual,         # degree of freedom is residual degree of freedom from model object
+                    lower.tail = FALSE)
+new_lower_ci <- new_coeff - qnorm(0.975) * new_se
+new_upper_ci <- new_coeff + qnorm(0.975) * new_se
+
+### Cluster Robust HC -----------
+
+message("Using vcovCL + manual t-test (df = G - 1)")
+cl_vcov <- sandwich::vcovCL(fit.object, cluster = cluster_var, type = robust_type)
+
+## Clean: required due to high memory usage
+gc()
+
+## Extract robust beta coefficient, p and SE
+new_coeff <- fit.object$coefficients[exposure_names]     # same as qgcomp object$psi
+new_se <- sqrt(cl_vcov[exposure_names, exposure_names])  # square root of covariance
+new_p_val <- 2 * pt(abs(new_coeff/new_se),         # get stat by coeff/SE
+                    df = length(unique(cluster_var)) - 1, # degree of freedom is number of clusters - 1
+                    lower.tail = FALSE)
+new_lower_ci <- new_coeff - qnorm(0.975) * new_se
+new_upper_ci <- new_coeff + qnorm(0.975) * new_se
+
+### Cluster Robust CR ------------
+message("Using vcovCR + manual t-test")
+cl_vcov <- clubSandwich::vcovCR(fit.object, cluster = cluster_var, type = robust_type)
+
+## Clean: required due to high memory usage
+gc()
+
+## Extract robust beta coefficient, p and SE
+new_coeff <- sum(fit.object$coefficients[exposure_names])     # same as qgcomp object$psi
+new_se <- sqrt(sum(cl_vcov[exposure_names, exposure_names, 
+                           drop = FALSE]))                    # square root of covariance
+
+## Satterthwaite calc
+which_beta <- names(coef(fit.object)) %in% exposure_names
+GH_obj <- clubSandwich:::get_GH(fit.object, cl_vcov)          # NOTE: using ::: to access internal function
+P_array <- clubSandwich:::get_P_array(GH_obj)                 # NOTE: using ::: to access internal function
+
+## Get projection
+P_combined <- array(0, dim = c(dim(P_array)[1:2], 1))
+exposure_indices <- which(names(coef(fit.object)) %in% exposure_names)
+for (g in seq_len(dim(P_array)[1])) {
+  for (h in seq_len(dim(P_array)[2])) {
+    P_combined[g, h, 1] <- sum(P_array[g, h, exposure_indices])
+  }
+}
+
+## Get Satterthwaite df for the combined effect
+df_satt <- clubSandwich:::Satterthwaite_df(P_combined)  # NOTE: using ::: to access internal function
+
+## Clean: required due to high memory usage
+gc()
+
+## Continue with p val calculations
+new_p_val <- 2 * pt(abs(new_coeff/new_se),                    # get stat by coeff/SE
+                    df = df_satt,                             # degree of freedom is Satterthwaite df
+                    lower.tail = FALSE)
+new_lower_ci <- new_coeff - qnorm(0.975) * new_se
+new_upper_ci <- new_coeff + qnorm(0.975) * new_se
+
+### Cluster Robust CR + Coef_test ------------------
+message("Using vcovCR + coef_test")
+cl_vcov <- clubSandwich::vcovCR(eval_object$model, cluster = cluster_var, type = robust_type)
+robust_cr2 <- clubSandwich::coef_test(eval_object$model, 
+                                      vcov = cl_vcov,
+                                      test = "Satterthwaite", 
+                                      coefs = c("mixture_score"))
+
+### Clean: required due to high memory usage
+gc()
+
+
+### Extract robust beta coefficient, p and SE
+new_coeff <- robust_cr2$beta
+new_p_val <- robust_cr2$p_Satt
+new_se <- robust_cr2$SE
+new_lower_ci <- new_coeff - qnorm(0.975) * new_se
+new_upper_ci <- new_coeff + qnorm(0.975) * new_se
+
+#### check manual ---------
+message("Using vcovCR + manual t-test")
+cl_vcov <- clubSandwich::vcovCR(eval_object$model, cluster = cluster_var, type = robust_type)
+
+## Clean: required due to high memory usage
+gc()
+
+## Extract robust beta coefficient, p and SE
+new_coeff <- sum(eval_object$model$coefficients[c("mixture_score")])     # same as qgcomp object$psi
+new_se <- sqrt(sum(cl_vcov[c("mixture_score"), c("mixture_score"), 
+                           drop = FALSE]))                    # square root of covariance
+
+## Satterthwaite calc
+which_beta <- names(coef(eval_object$model)) %in% c("mixture_score")
+GH_obj <- clubSandwich:::get_GH(eval_object$model, cl_vcov)          # NOTE: using ::: to access internal function
+P_array <- clubSandwich:::get_P_array(GH_obj)                 # NOTE: using ::: to access internal function
+
+## Get projection
+P_combined <- array(0, dim = c(dim(P_array)[1:2], 1))
+exposure_indices <- which(names(coef(eval_object$model)) %in% c("mixture_score"))
+for (g in seq_len(dim(P_array)[1])) {
+  for (h in seq_len(dim(P_array)[2])) {
+    P_combined[g, h, 1] <- sum(P_array[g, h, exposure_indices])
+  }
+}
+
+## Get Satterthwaite df for the combined effect
+df_satt <- clubSandwich:::Satterthwaite_df(P_combined)  # NOTE: using ::: to access internal function
+
+## Clean: required due to high memory usage
+gc()
+
+## Continue with p val calculations
+new_p_val <- 2 * pt(abs(new_coeff/new_se),                    # get stat by coeff/SE
+                    df = df_satt,                             # degree of freedom is Satterthwaite df
+                    lower.tail = FALSE)
+new_lower_ci <- new_coeff - qnorm(0.975) * new_se
+new_upper_ci <- new_coeff + qnorm(0.975) * new_se
+
+### Output df -------------
+df <- data.frame(
+  beta = new_coeff,
+  p_val = new_p_val,
+  std_error = new_se,
+  lower_ci = new_lower_ci,
+  upper_ci = new_upper_ci,
+  row.names = NULL
+)
+
+df
+
+
+
+
+
+## OLD Test Set Approximation Function Diagnostics ---------
+# Mixture on Test Set
+if(FALSE){
 ## Initialize params
 object <- qgcomp_all_components
 test_data <- test_data_df
@@ -1072,12 +1656,16 @@ rhs <- as.character(object$fit$formula)[3]
 formula_str <- paste0(lhs, "~", "test_target_mix" , "+" , rhs)
 formula_str
 
-length(test_data$test_target_mix)
-length(test_data)
-
 ## Model lm
+# model_test <- lm(data = test_data,formula = formula_str, weights = (observation_wt_col))
 model_test <- eval(substitute(lm(formula = formula_str, data = test_data, weights = W), list(W = as.name(observation_wt_col))))
-summary(model_test)
+
+# Return
+## return object
+eval_object <- list()
+eval_object$model <- copy(model_test)
+eval_object$data <- copy(test_data)
+
 
 # Cluster Robust Errors
 ## Check counts
@@ -1098,13 +1686,19 @@ if(cluster_robust_method == "vcovCR")
 {
   ## Cluster Robust CR2
   ### Get estimates
-  cluster_var <- test_data[[cluster_col]]
-  robust_cr2 <- clubSandwich::coef_test(model_test, 
+  cluster_var <- train_data[[cluster_col]]
+  robust_cr2 <- clubSandwich::coef_test(qgcomp_all_components$fit, 
                                         vcov = "CR2", 
                                         cluster = cluster_var,
                                         test = "Satterthwaite", 
-                                        coefs = "test_target_mix")
-  
+                                        coefs = c(
+                                          'C1M_School_closing_April_12_May_23',
+                                          'C2M_Workplace_closing_April_12_May_23',
+                                          'C3M_Cancel_public_events_April_12_May_23',
+                                          'C4M_Restrictions_on_gatherings_April_12_May_23',
+                                          'C5M_Close_public_transport_April_12_May_23',
+                                          'C6M_Stay_at_home_requirements_April_12_May_23',
+                                          'C7M_Restrictions_on_internal_movement_April_12_May_23'))
   
   ### Extract robust beta coefficient, p and SE for test_target_mix
   mix_coeff <- robust_cr2$beta
@@ -1151,3 +1745,121 @@ df_qgcomp_test <-  qgcomp.test.eval(object = qgcomp_all_components,
                                     cluster_robust_method = "vcovCR")
 
 df_qgcomp_test
+
+}
+
+
+# New Test -------------------------
+
+
+## STEP 1: LOAD DATA ---------
+# Load necessary libraries
+library(caret)
+
+# Load the Iris dataset
+data(iris)
+
+# Set seed for reproducibility
+set.seed(123)
+
+# Perform stratified 80-20 split (80% for training, 20% for testing)
+train_index <- createDataPartition(iris$Species, p = 0.8, list = FALSE)
+
+# Split data into train and test sets
+train_data <- iris[train_index, ]
+test_data <- iris[-train_index, ]
+
+# View the dimensions of the train and test sets
+dim(train_data)
+dim(test_data)
+
+## STEP 2: DESIGN MATRIX TRAIN --------
+# Fit a GLM on the training data
+glm_model_train <- glm(Sepal.Length ~ Sepal.Width + Petal.Length, data = train_data)
+
+# Display the summary of the fitted model
+summary(glm_model_train)
+
+# Get the design matrix (X) based on the training data
+X_train <- model.matrix(glm_model_train)
+
+# Display the design matrix for the training data
+head(X_train)
+
+## STEP 3: DESIGN MATRIX TEST or DIRECT COLUMNS --------
+# Get the design matrix based on the test data (using the same variables)
+X_test <- model.matrix(Sepal.Length ~ Sepal.Width + Petal.Length, data = test_data)
+
+# Display the design matrix for the test data
+head(X_test)
+
+
+## STEP 4: COEFF AND VARIANCE FROM TRAINING ------
+# Get coefficients from TRAINING
+coefficients_train <- glm_model_train$coefficients
+
+# Get the residuals
+residuals_train <- glm_model_train$residuals
+
+# Calculate the residual sum of squares
+RSS_train <- sum(residuals_train^2)
+
+# Get the number of observations and the number of predictors (including intercept)
+n_train <- nrow(train_data)
+p_train <- length(glm_model_train$coefficients)
+
+# Calculate the residual variance (sigma^2)
+sigma_squared_train <- RSS_train / (n_train - p_train)
+
+# Print the residual variance
+print(sigma_squared_train)
+
+## STEP 5: FISHERS MATRIX FOR TESTING ---------
+# Calculate Fishers matrix for TESTING
+fisher_info_test <- (1 / sigma_squared_train) * t(X_test) %*% X_test
+
+# Print the Fisher Information Matrix for the test set
+print(fisher_info_test)
+
+## STEP 6: SOLVE FISHERS MATRIX ----------
+# Calculate the variance-covariance matrix (inverse of the Fisher Information Matrix)
+var_cov_matrix_test <- solve(fisher_info_test)
+
+# Print the variance-covariance matrix
+print(var_cov_matrix_test)
+
+## STEP 7: CALCULATE STANDARD ERRORS -------------
+# Calculate the standard errors (square root of the diagonal elements of the variance-covariance matrix)
+standard_errors_test <- sqrt(diag(var_cov_matrix_test))
+
+# Print the standard errors
+print(standard_errors_test)
+
+## STEP 8: TEST STAT AND P VALUE -----------
+z_statistics <- coefficients_train / standard_errors_test
+
+p_values <- 2 * (1 - pnorm(abs(z_statistics)))
+
+# Print the z-statistics and p-values
+print("Z-Statistics (Test Statistics):")
+print(z_statistics)
+
+print("P-Values:")
+print(p_values)
+
+conf_int_lower <- coefficients_train - qnorm(0.95)*standard_errors_test
+conf_int_upper <- coefficients_train + qnorm(0.95)*standard_errors_test
+
+print(conf_int_lower)
+print(conf_int_upper)
+
+## STEP 9: PRINT -----------
+result <- data.frame(
+  Coefficient = coefficients_train,
+  Z_Statistic = z_statistics,
+  P_Value = p_values,
+  Lower_95_CI = conf_int_lower,
+  Upper_95_CI = conf_int_upper
+)
+
+print(result)

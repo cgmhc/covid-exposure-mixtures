@@ -2,3 +2,10 @@
 .Rhistory
 .RData
 .Ruserdata
+data
+data-raw
+*.csv
+*.RData
+*.html
+*.parquet
+old_files

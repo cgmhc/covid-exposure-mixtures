@@ -58,7 +58,7 @@ dir_data <- here::here(paste0("02-modeling/data/"))
 ```
 
 ```{r}
-source(here::here("2d_qgcomp_custom.R"))
+source(here::here("2d-qgcomp-custom.R"))
 ```
 
 
@@ -221,6 +221,215 @@ check_policy_ranges = function(data) {
 ```
 
 
+# Functions
+
+```{r}
+#' Create a single stratified train/test split
+#' 
+#' This function creates a train/test split using either manual stratified sampling
+#' or tidymodels approach. The manual method stratifies by region_final and gad_category,
+#' randomly ordering observations within each stratum and allocating 50% to training.
+#' 
+#' @param data The full dataset to split
+#' @param seed_value Seed for reproducible randomization
+#' @param method Either "manual" for custom stratified sampling or "tidymodels" for rsample approach
+#' @return List containing train_data, test_data, and seed value
+create_stratified_split = function(data, seed_value, method = "manual") {
+  set.seed(seed_value)
+  
+  if(method == "manual") {
+    # Manual stratified sampling: stratify by region and GAD category
+    stratified_data = data %>%
+      group_by(region_final, gad_category) %>%
+      mutate(random_order = runif(n())) %>%  # Random ordering within strata
+      arrange(random_order) %>%
+      mutate(
+        stratum_size = n(),
+        train_size = floor(stratum_size * 0.50),  # 50% to training, rounded down
+        train_flag = row_number() <= train_size
+      ) %>%
+      ungroup()
+    
+    train_data = stratified_data %>% filter(train_flag == TRUE)
+    test_data = stratified_data %>% filter(train_flag == FALSE)
+    
+  } else if(method == "tidymodels") {
+    # Using tidymodels initial_split with stratification
+    data_split = initial_split(data, prop = 0.50, strata = "strata_var", pool = 0.05)
+    train_data = training(data_split)
+    test_data = testing(data_split)
+  }
+  
+  return(list(train = train_data, test = test_data, seed = seed_value))
+}
+
+#' Calculate balance score using logistic regression AUC
+#' 
+#' This function measures how well covariates can predict whether an observation
+#' is in the training or test set. Lower AUC (closer to 0.5) indicates better
+#' balance, as covariates cannot distinguish between train/test groups.
+#' This is the key metric for rerandomization selection.
+#' 
+#' @param train_data Training dataset
+#' @param test_data Test dataset  
+#' @param covariates Vector of covariate names to include in balance model
+#' @return List with AUC value and diagnostic information
+calculate_balance_auc = function(train_data, test_data, covariates) {
+  # Combine datasets with group indicator (0=train, 1=test)
+  combined_data = bind_rows(
+    train_data %>% select(all_of(covariates)) %>% mutate(group = 0),
+    test_data %>% select(all_of(covariates)) %>% mutate(group = 1)
+  )
+  
+  # Remove rows with any missing values in covariates
+  complete_data = combined_data %>% 
+    select(all_of(c(covariates, "group"))) %>%
+    na.omit()
+  
+  if(nrow(complete_data) < 50) {
+    warning("Insufficient complete observations for AUC calculation")
+    return(list(auc = NA, n_complete = nrow(complete_data)))
+  }
+  
+  # Convert categorical variables to factors for modeling
+  for(covar in covariates) {
+    if(covar %in% names(complete_data)) {
+      if(is.character(complete_data[[covar]]) || is.factor(complete_data[[covar]])) {
+        complete_data[[covar]] = factor(complete_data[[covar]])
+      }
+    }
+  }
+  
+  # Build formula - include all available covariates
+  # No restriction on categorical levels since our max is 9 levels
+  formula_parts = character(0)
+  for(covar in covariates) {
+    if(covar %in% names(complete_data)) {
+      formula_parts = c(formula_parts, covar)
+    }
+  }
+  
+  if(length(formula_parts) == 0) {
+    warning("No suitable covariates for balance regression")
+    return(list(auc = NA, n_complete = nrow(complete_data)))
+  }
+  
+  # Create logistic regression formula: group ~ all_covariates
+  formula_str = paste("group ~", paste(formula_parts, collapse = " + "))
+  
+  # Fit logistic regression predicting train/test assignment from covariates
+  tryCatch({
+    balance_model = glm(as.formula(formula_str), 
+                        data = complete_data, 
+                        family = binomial())
+    
+    # Get predicted probabilities of being in test set
+    predictions = predict(balance_model, type = "response")
+    
+    # Calculate AUC: How well can covariates predict train/test assignment?
+    # AUC near 0.5 = poor prediction = good balance
+    # AUC near 1.0 = excellent prediction = poor balance
+    auc_result = pROC::auc(complete_data$group, predictions, quiet = TRUE)
+    
+    return(list(
+      auc = as.numeric(auc_result), 
+      n_complete = nrow(complete_data),
+      n_predictors = length(formula_parts),
+      model_converged = balance_model$converged
+    ))
+    
+  }, error = function(e) {
+    warning(paste("Error in balance regression:", e$message))
+    return(list(auc = NA, n_complete = nrow(complete_data)))
+  })
+}
+
+#' Perform rerandomization to find optimal train/test split
+#' 
+#' This function generates multiple candidate train/test splits and selects
+#' the one with the best covariate balance (lowest AUC). This addresses
+#' the concern that random chance imbalance could drive differences in
+#' policy effect estimates between training and test sets.
+#' 
+#' @param data Full dataset to split
+#' @param n_randomizations Number of candidate splits to generate (5-10 recommended)
+#' @param method Splitting method ("manual" or "tidymodels")
+#' @return List containing best split, all results, and diagnostics
+perform_rerandomization = function(data, n_randomizations = 10, method = "manual") {
+  cat("Performing rerandomization with", n_randomizations, "random splits...\n")
+  
+  # Generate unique seeds for reproducible randomization
+  set.seed(42) # Set seed for reproducible results across different exposure windows
+  seeds = sample(1:100000, n_randomizations)
+  
+  # Initialize storage for results
+  randomization_results = tibble()
+  splits_list = list()
+  
+  # Progress bar for user feedback
+  pb = txtProgressBar(min = 0, max = n_randomizations, style = 3)
+  
+  # Generate and evaluate each candidate split
+  for(i in 1:n_randomizations) {
+    setTxtProgressBar(pb, i)
+    
+    # Create stratified split with unique seed
+    split_result = create_stratified_split(data, seeds[i], method)
+    splits_list[[i]] = split_result
+    
+    # Calculate balance AUC for this split
+    balance_result = calculate_balance_auc(
+      split_result$train, 
+      split_result$test, 
+      existing_covariates
+    )
+    
+    # Store results for comparison
+    randomization_results = bind_rows(randomization_results, tibble(
+      randomization = i,
+      seed = seeds[i],
+      auc = balance_result$auc,
+      n_complete = balance_result$n_complete,
+      n_predictors = balance_result$n_predictors %||% NA,
+      model_converged = balance_result$model_converged %||% NA,
+      train_n = nrow(split_result$train),
+      test_n = nrow(split_result$test)
+    ))
+  }
+  
+  close(pb)
+  
+  # Find best randomization: lowest AUC indicates best balance
+  best_randomization = randomization_results %>%
+    filter(!is.na(auc)) %>%
+    slice_min(auc, n = 1) %>%
+    slice(1)  # In case of ties, take the first
+  
+  if(nrow(best_randomization) == 0) {
+    stop("No valid randomizations found. Check data and covariates.")
+  }
+  
+  cat("\n=== results of rerandomization ===\n")
+  cat("Number of valid randomizations:", sum(!is.na(randomization_results$auc)), "\n")
+  cat("AUC range:", round(range(randomization_results$auc, na.rm = TRUE), 4), "\n")
+  cat("Best randomization:", best_randomization$randomization, "\n")
+  cat("Best AUC (lower is better):", round(best_randomization$auc, 4), "\n")
+  cat("Best seed:", best_randomization$seed, "\n\n")
+  
+  # Return best split and all results for analysis
+  best_split = splits_list[[best_randomization$randomization]]
+  
+  return(list(
+    best_split = best_split,
+    all_results = randomization_results,
+    best_randomization = best_randomization,
+    all_splits = splits_list
+  ))
+}
+
+```
+
+
 
 
 # Loop for exposure windows
@@ -235,6 +444,7 @@ stringency_keys <- c("march_15_june_30", "march_22_may_23", "april_12_may_23")
 # period_keys <- c("20200315_20200627")
 # suffixes <-c("_March_15_June_27")
 # stringency_keys <- c("march_15_june_30")
+# i = 1
 
 results_est_list <- list()
 results_hicc_list <- list()
@@ -851,83 +1061,386 @@ for (i in seq_along(period_keys)) {
     )
   
   cope_auo_july_no_miss_w_stringency$age_group = as.factor(cope_auo_july_no_miss_w_stringency$age_group)
-
-  # Splitting the data into training (70%) and testing (30%) sets, ensuring the same distribution of gad_score_avg
+  
+  # Train Test Split ---------------------------
+  # Create stratified train/test split based on GAD-7 outcome (50/50)
+  # Create GAD-7 quartile bins
+  gad_quantiles = quantile(cope_auo_july_no_miss_w_stringency$gad_score_july, probs = 0:3/3, na.rm = TRUE)
+  print(gad_quantiles) # 0, 1, 5, 21
+  
+  # Create GAD-7 tertile bins using quantile values (specified above)
+  cope_auo_july_no_miss_w_stringency$gad_category = cut(cope_auo_july_no_miss_w_stringency$gad_score_july,
+                                    breaks = c(0, 1, 5, 21),
+                                    labels = c("None", "Minimal", "Mild_Severe"),
+                                    include.lowest = TRUE, right = FALSE)
+  
+  cope_auo_july_no_miss_w_stringency$gad_category = cut(cope_auo_july_no_miss_w_stringency$gad_score_july,
+                                   breaks = c(0, 5, 15, 21),
+                                   labels = c("Minimal", "Mild", "Moderate_Severe"),
+                                   include.lowest = TRUE, right = FALSE)
+  
+  
+  # Check for missing values in gad_category after cut()
+  cat("Checking for missing values in gad_category after cut() function:\n")
+  gad_category_table = table(cope_auo_july_no_miss_w_stringency$gad_category, useNA = "ifany")
+  print(gad_category_table)
+  
+  # Check if there are any missing values
+  missing_count = sum(is.na(cope_auo_july_no_miss_w_stringency$gad_category))
+  cat("Number of missing values in gad_category:", missing_count, "\n")
+  
+  if(missing_count > 0) {
+    warning("Missing values detected in gad_category. Investigating...")
+    # Show which original GAD scores led to missing categories
+    missing_gad_scores = cope_auo_july_no_miss_w_stringency$gad_score_july[is.na(cope_auo_july_no_miss_w_stringency$gad_category)]
+    cat("Original GAD scores that resulted in missing categories:\n")
+    print(summary(missing_gad_scores))
+  } else {
+    cat("✓ No missing values in gad_category after cut() function\n")
+  }
+  cat("\n")
+  
+  # Identify states with sufficient sample sizes for individual stratification
+  large_states = cope_auo_july_no_miss_w_stringency %>%
+    count(RegionName) %>%
+    filter(n >= 400) %>%  # Conservative threshold for adequate severe cases
+    pull(RegionName)
+  
+  
+  # Create grouping across US regions 
+  cope_auo_july_no_miss_w_stringency$region_final = case_when(
+    cope_auo_july_no_miss_w_stringency$RegionName %in% large_states ~ as.character(cope_auo_july_no_miss_w_stringency$RegionName),
+    cope_auo_july_no_miss_w_stringency$RegionName %in% c("Maine", "New Hampshire", "Vermont", "Rhode Island", "Connecticut") ~ "New_England",
+    cope_auo_july_no_miss_w_stringency$RegionName %in% c("Delaware", "Maryland", "Virginia", "West Virginia", "Kentucky", "Tennessee") ~ "Mid_Atlantic_South",
+    cope_auo_july_no_miss_w_stringency$RegionName %in% c("North Carolina", "South Carolina", "Georgia", "Alabama", "Mississippi", "Louisiana", "Arkansas") ~ "Southeast",
+    cope_auo_july_no_miss_w_stringency$RegionName %in% c("Indiana", "Missouri", "Iowa", "Kansas", "Nebraska", "North Dakota", "South Dakota") ~ "Midwest_Plains",
+    cope_auo_july_no_miss_w_stringency$RegionName %in% c("Montana", "Wyoming", "Colorado", "Utah", "Idaho", "Nevada", "New Mexico") ~ "Mountain_West",
+    cope_auo_july_no_miss_w_stringency$RegionName %in% c("Oregon", "Washington", "Alaska", "Hawaii") ~ "Pacific_Northwest",
+    TRUE ~ "Other_States"
+  )
+  
+  # Create combined stratification variable
+  cope_auo_july_no_miss_w_stringency$strata_var = paste(cope_auo_july_no_miss_w_stringency$region_final, cope_auo_july_no_miss_w_stringency$gad_category, sep = "_")
+  
+  # Check for any remaining small strata
+  strata_counts = table(cope_auo_july_no_miss_w_stringency$strata_var)
+  small_strata = strata_counts[strata_counts < 20]
+  if(length(small_strata) > 0) {
+    print("Remaining small strata:")
+    print(small_strata)
+  }
+  
+  ################################
+  # MANUAL STRATIFIED SAMPLING IMPLEMENTATION
+  ################################
+  
+  # The initial_split() function from rsample failed to execute stratified sampling despite multiple attempts to consolidate regional groupings and adjust the pool parameter. 
+  # The function's default behavior requires a minimum threshold of observations within each stratum that appears to be overly conservative for our purposes.
+  # This issue persisted, even with pool = 0.1, which should allow strata representing as little as 10% of the dataset.
+  #
+  # This manual implementation addresses these limitations by ensuring that each combination of geographic region (region_final) and GAD-7 category (gad_category) maintains 
+  # proportional representation across training and testing datasets. 
+  # The floor() function determines training set sizes within  ach stratum by rounding down to the nearest integer, which prevents fractional allocations 
+  # This also ensures that smaller strata contribute at least some observations to both datasets when possible.
+  #
+  
+  # Set seed for reproducibility
   set.seed(42)
+  
+  # Manual stratified sampling split
+  stratified_data = cope_auo_july_no_miss_w_stringency %>%
+    
+    # Group observations by geographic region and anxiety severity level
+    group_by(region_final, gad_category) %>%
+    
+    # Randomly shuffle observations within each combination of region and GAD category
+    # This prevents any bias from the ordering of rows in the original data 
+    mutate(random_order = runif(n())) %>%
+    arrange(random_order) %>%
+    
+    # Determine how many observations from each stratum go to training vs testing
+    # Using floor ensures we get whole numbers and maintain the 50/50 split intention
+    mutate(
+      stratum_size = n(),
+      train_size = floor(stratum_size * 0.50),
+      train_flag = row_number() <= train_size
+    ) %>%
+    ungroup()
+  
+  # Creating training and testing datasets
+  train_data = stratified_data %>% filter(train_flag == TRUE)
+  test_data = stratified_data %>% filter(train_flag == FALSE)
+  
+  # Display overall split sizes
+  cat("Total observations:", nrow(cope_auo_july_no_miss_w_stringency), "\n")
+  cat("Training set:", nrow(train_data), "\n") 
+  cat("Testing set:", nrow(test_data), "\n")
+  cat("Training proportion:", round(nrow(train_data) / nrow(cope_auo_july_no_miss_w_stringency), 3), "\n")
+  cat("Testing proportion:", round(nrow(test_data) / nrow(cope_auo_july_no_miss_w_stringency), 3), "\n")
+  
 
-  data_split = initial_split(cope_auo_july_no_miss_w_stringency, prop = 0.70, strata = "gad_score_july")
+  # COMPARISON: MANUAL VS TIDYMODELS APPROACH ----------------
   
-  # Extract training and testing sets
-  train_data = training(data_split)
-  test_data  = testing(data_split)
+  # Adding tidymodels approach for comparison
+  set.seed(42)
+  data_split_tidymodels = initial_split(cope_auo_july_no_miss_w_stringency, prop = 0.50, strata = "strata_var", pool = 0.05)
+  train_data_tidymodels = training(data_split_tidymodels)
+  test_data_tidymodels = testing(data_split_tidymodels)
   
-  # Print the dimensions of the training and testing sets
-  print(paste0("Dimensions of full sample: ", dim(cope_auo_july_no_miss_w_stringency)[1], " rows and ", dim(cope_auo_july_no_miss_w_stringency)[2], " columns"))
-  print(paste0("Dimensions of train_data: ", dim(train_data)[1], " rows and ", dim(train_data)[2], " columns"))
-  print(paste0("Dimensions of test_data: ",  dim(test_data)[1],  " rows and ", dim(test_data) [2], " columns"))
-  
-  colnames(train_data) = gsub(" ", "_", colnames(train_data))
-  colnames(test_data) = gsub(" ", "_", colnames(test_data))
-  
-  # Check the distribution of gad_score_avg in the training set
-  ggplot(train_data, aes(x = gad_score_july)) +
-    geom_histogram(binwidth = 2, fill = "#2ba2ce", color = "black") +
-    theme_classic() +
-    labs(title = "Distribution of GAD Score Average in Training Set",
-         x = "GAD Score Average",
-         y = "Frequency")
-  
-  # Check the distribution of gad_score_avg in the testing set
-  ggplot(test_data, aes(x = gad_score_july)) +
-    geom_histogram(binwidth = 2, fill = "#2ba2ce", color = "black") +
-    theme_classic() +
-    labs(title = "Distribution of GAD Score Average in Testing Set",
-         x = "GAD Score Average",
-         y = "Frequency")
+  # Comparing overall split sizes
+  cat("Manual Method - Training:", nrow(train_data), "Testing:", nrow(test_data), "\n")
+  cat("Tidymodels Method - Training:", nrow(train_data_tidymodels), "Testing:", nrow(test_data_tidymodels), "\n\n")
   
   
-  # Function to impute missing values using missForest 
-  train_data_df = as.data.frame(train_data)
-  test_data_df  = as.data.frame(test_data)
+  # VERIFICATION CHECK -----------------------------
   
-  # Create window wise sets
-  assign(paste0("train_data_df", tolower(suffixes[i])), copy(train_data_df))
-  assign(paste0("test_data_df", tolower(suffixes[i])), copy(test_data_df))
+  # Verify stratification across regions - comparing both methods 
+  # Counts and proportions are kept separate for better readability 
+  verifying_state_stratification_counts = bind_rows(
+    # Manual method results
+    train_data %>% 
+      count(region_final) %>% 
+      mutate(method = "manual", dataset = "training"),
+    test_data %>% 
+      count(region_final) %>% 
+      mutate(method = "manual", dataset = "testing"),
+    # Tidymodels method results
+    train_data_tidymodels %>% 
+      count(region_final) %>% 
+      mutate(method = "tidymodels", dataset = "training"),
+    test_data_tidymodels %>% 
+      count(region_final) %>% 
+      mutate(method = "tidymodels", dataset = "testing")
+  ) %>%
+    select(region_final, method, dataset, n) %>%
+    pivot_wider(names_from = c(method, dataset), values_from = n, names_sep = "_")
+  
+  verifying_state_stratification_proportions = bind_rows(
+    # Manual method results
+    train_data %>% 
+      count(region_final) %>% 
+      mutate(method = "manual", dataset = "training", proportion = n / sum(n)),
+    test_data %>% 
+      count(region_final) %>% 
+      mutate(method = "manual", dataset = "testing", proportion = n / sum(n)),
+    # Tidymodels method results
+    train_data_tidymodels %>% 
+      count(region_final) %>% 
+      mutate(method = "tidymodels", dataset = "training", proportion = n / sum(n)),
+    test_data_tidymodels %>% 
+      count(region_final) %>% 
+      mutate(method = "tidymodels", dataset = "testing", proportion = n / sum(n))
+  ) %>%
+    select(region_final, method, dataset, proportion) %>%
+    pivot_wider(names_from = c(method, dataset), values_from = proportion, names_sep = "_")
+  
+  print("Regional Stratification - Sample Counts:")
+  print(verifying_state_stratification_counts)
+  print("Regional Stratification - Proportions:")
+  print(verifying_state_stratification_proportions)
+  
+  # Verify stratification across GAD-7 categories - comparing both methods
+  gad_verification_counts = bind_rows(
+    # Manual method results
+    train_data %>% 
+      count(gad_category) %>% 
+      mutate(method = "manual", dataset = "training"),
+    test_data %>% 
+      count(gad_category) %>% 
+      mutate(method = "manual", dataset = "testing"),
+    # Tidymodels method results
+    train_data_tidymodels %>% 
+      count(gad_category) %>% 
+      mutate(method = "tidymodels", dataset = "training"),
+    test_data_tidymodels %>% 
+      count(gad_category) %>% 
+      mutate(method = "tidymodels", dataset = "testing")
+  ) %>%
+    select(gad_category, method, dataset, n) %>%
+    pivot_wider(names_from = c(method, dataset), values_from = n, names_sep = "_")
+  
+  gad_verification_proportions = bind_rows(
+    # Manual method results
+    train_data %>% 
+      count(gad_category) %>% 
+      mutate(method = "manual", dataset = "training", proportion = n / sum(n)),
+    test_data %>% 
+      count(gad_category) %>% 
+      mutate(method = "manual", dataset = "testing", proportion = n / sum(n)),
+    # Tidymodels method results
+    train_data_tidymodels %>% 
+      count(gad_category) %>% 
+      mutate(method = "tidymodels", dataset = "training", proportion = n / sum(n)),
+    test_data_tidymodels %>% 
+      count(gad_category) %>% 
+      mutate(method = "tidymodels", dataset = "testing", proportion = n / sum(n))
+  ) %>%
+    select(gad_category, method, dataset, proportion) %>%
+    pivot_wider(names_from = c(method, dataset), values_from = proportion, names_sep = "_")
+  
+  print("GAD-7 Category Stratification - Sample Counts:")
+  print(gad_verification_counts)
+  print("GAD-7 Category Stratification - Proportions:")
+  print(gad_verification_proportions)
+  
+  # Verify stratification within each stratum - manual method only
+  stratum_verification = stratified_data %>%
+    group_by(region_final, gad_category) %>%
+    summarise(
+      total_n = n(),
+      train_n = sum(train_flag),
+      test_n = sum(!train_flag),
+      train_prop = mean(train_flag),
+      .groups = "drop"
+    ) %>%
+    arrange(total_n)
+  
+  print("Stratum-Level Verification (Manual Method):")
+  print(stratum_verification)
+  
+  # PERFORMING RERANDOMIZATION TO SELECT THE RANDOMIZATION WITH THE LOWEST AUC --------------------------------------------------
+  
+  
+  cat("=== Rerandomization to determine 'optimal' train/test split ===\n")
+  
+  # Define list of covariates for balance assessment
+  # These are the key predictors we want balanced between train/test sets
+  balance_covariates = c(
+    "age_2020", "home", "maritalstatus", "race", "education", "employment", 
+    "insurance", "anxiety_disorder_before_covid_lifetime", "anxiety_disorder_1yr_before_covid", 
+    "sex", "birthplace", "generalized_anxiety_disorder_before_covid_lifetime",
+    "generalized_anxiety_disorder_1yr_before_covid", "gad_score_avg_july",
+    "observation_wt_trim"
+  )
+  
+  # Check which covariates exist in the data
+  existing_covariates = intersect(balance_covariates, names(cope_auo_july_no_miss_w_stringency))
+  missing_covariates = setdiff(balance_covariates, names(cope_auo_july_no_miss_w_stringency))
+  
+  if(length(missing_covariates) > 0) {
+    cat("Missing covariates for balance analysis:", paste(missing_covariates, collapse = ", "), "\n")
+  }
+  
+  cat("Analyzing balance for", length(existing_covariates), "covariates:\n")
+  cat(paste(existing_covariates, collapse = ", "), "\n\n")
+  
+  # Perform rerandomization analysis to select optimal split
+  cat("Running rerandomization analysis...\n")
+  rerand_results = perform_rerandomization(cope_auo_july_no_miss_w_stringency, n_randomizations = 20, method = "manual")
+  
+  # Store results and full dataframe
+  assign(paste0("rerand_results", tolower(suffixes[i])), rerand_results)
   assign(paste0("cope_auo_july_no_miss_w_stringency", tolower(suffixes[i])), copy(cope_auo_july_no_miss_w_stringency))
   
-  # Save locally
-  all_objs <- ls(pattern = "^(train|test)_data_df_|^cope_auo_july_no_miss_w_stringency_")
-  save(list = all_objs, file = paste0(dir_data, "2d_model_objects", tolower(suffixes[i]), ".RData"))
-  
-  # Save to bucket
-  ## Replace with THE NAME of the file you're going to store in the bucket (don't delete the quotation marks)
-  destination_filename = paste0(dir_data, "2d_model_objects", tolower(suffixes[i]), ".RData")
-  
-  ########################################################################
-  ##
-  ################# DON'T CHANGE FROM HERE ###############################
-  ##
-  ########################################################################
-  
-  # store the data in current workspace
-  # save(all_objs, file = destination_filename)
-  
-  # Get the bucket name
-  my_bucket = Sys.getenv('WORKSPACE_BUCKET')
-  
-  # Copy the file from current workspace to the bucket
-  system(paste0("gsutil cp ", destination_filename, " ", my_bucket, "/data/"), intern=T)
-  
-  # Check if file is in the bucket
-  print(system(paste0("gsutil ls ", my_bucket, "/data/*.RData"), intern=T))
-  
 }
+
+
+```
+
+
+# Filter for best results across selected exposure windows
+
+
+```{r}
+# Initialize an empty list to hold intermediate dataframes
+results_list <- list()
+
+# Loop through suffixes
+for (i in seq_along(suffixes)) {
+  suffix <- tolower(suffixes[i])
+  varname <- paste0("rerand_results", suffix)
+  df <- get(varname)$all_results[, c("seed", "auc", "model_converged")]
+
+  # Rename columns with suffix
+  colnames(df) <- paste0(c("seed", "auc", "model_converged"), suffix)
+
+  results_list[[suffix]] <- df
+}
+
+# Merge all dataframes by position (not by key) using cbind
+combined_df <- Reduce(function(x, y) cbind(x, y), results_list)
+
+# Compute row-wise average of all AUC columns
+auc_cols <- grep("^auc_", colnames(combined_df))
+combined_df$average_auc <- rowMeans(combined_df[, auc_cols], na.rm = TRUE)
+
+```
+
+
+```{r}
+# Get best split
+
+# Find best randomization: lowest AUC indicates best balance
+best_randomization = combined_df %>%
+  filter(!is.na(average_auc)) %>%
+  slice_min(average_auc, n = 1) %>%
+  slice(1)  # In case of ties, take the first
+
+# View
+print(best_randomization)
+
+# Extract seed
+seed_cols <- grep("^seed_", names(best_randomization), value = TRUE)
+final_seed <- unique(unlist(best_randomization[, seed_cols]))
 ```
 
 
 
+```{r}
+# Match seed to get splits for all exposure windows
 
+for (i in seq_along(period_keys)) {
+  
+  ## get results
+  suffix <- tolower(suffixes[i])
+  varname <- paste0("rerand_results", suffix)
+  rerand_results <- get(varname)
+  
+  ## match index and split
+  matching_index <- which(
+    sapply(rerand_results$all_splits, function(x) x$seed == final_seed)
+  )
+  
+  matching_split <- rerand_results$all_splits[[matching_index]]
+  
+  ## Extract training and testing sets
+  train_data_df = matching_split$train
+  test_data_df  = matching_split$test
+  
+  assign(paste0("train_data_df", tolower(suffixes[i])), copy(train_data_df))
+  assign(paste0("test_data_df", tolower(suffixes[i])), copy(test_data_df))
+  
+}
+```
 
+# Export
 
+```{r}
+# Save locally
+all_objs <- ls(pattern = "^(train|test)_data_df_|^cope_auo_july_no_miss_w_stringency_")
+save(list = all_objs, file = paste0(dir_data, "2d_model_objects", ".RData"))
+
+# Save to bucket
+## Replace with THE NAME of the file you're going to store in the bucket (don't delete the quotation marks)
+destination_filename = paste0(dir_data, "2d_model_objects", ".RData")
+
+########################################################################
+##
+################# DON'T CHANGE FROM HERE ###############################
+##
+########################################################################
+
+# store the data in current workspace
+# save(all_objs, file = destination_filename)
+
+# Get the bucket name
+my_bucket = Sys.getenv('WORKSPACE_BUCKET')
+
+# Copy the file from current workspace to the bucket
+system(paste0("gsutil cp ", destination_filename, " ", my_bucket, "/data/"), intern=T)
+
+# Check if file is in the bucket
+print(system(paste0("gsutil ls ", my_bucket, "/data/*.RData"), intern=T))
+```
 
 

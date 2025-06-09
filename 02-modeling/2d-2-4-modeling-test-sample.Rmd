@@ -123,7 +123,7 @@ load_packages(required_packages)
 
 ```{r}
 # Source functions
-source(here::here("2d_qgcomp_custom.R"))
+source(here::here("2d-qgcomp-custom.R"))
 
 # Directory paths
 dir_data <- here::here(paste0("02-modeling/data/"))
@@ -132,41 +132,31 @@ dir_tables <- here::here(paste0("02-modeling/tables/"))
 
 # Load data
 
-
 ```{r}
-period_keys <- c("20200315_20200627", "20200322_20200523", "20200412_20200523")
-suffixes <-c("_March_15_June_27", "_March_22_May_23", "_April_12_May_23")
-stringency_keys <- c("march_15_june_30", "march_22_may_23", "april_12_may_23")
+# Source from bucket
+# This code copies a file from your Google Bucket into a dataframe
 
+# replace 'test.csv' with the name of the file in your google bucket (don't delete the quotation marks)
+name_of_file_in_bucket =  paste0("2d_model_objects", ".RData")
 
-for (i in seq_along(period_keys)) {
-  
-  # Source from bucket
-  # This code copies a file from your Google Bucket into a dataframe
+########################################################################
+##
+################# DON'T CHANGE FROM HERE ###############################
+##
+########################################################################
 
-  # replace 'test.csv' with the name of the file in your google bucket (don't delete the quotation marks)
-  name_of_file_in_bucket =  paste0("2d_model_objects", tolower(suffixes[i]), ".RData")
-  
-  ########################################################################
-  ##
-  ################# DON'T CHANGE FROM HERE ###############################
-  ##
-  ########################################################################
-  
-  # Get the bucket name
-  my_bucket = Sys.getenv('WORKSPACE_BUCKET')
-  
-  # Copy the file from current workspace to the bucket
-  system(paste0("gsutil cp ", my_bucket, "/data/", name_of_file_in_bucket, " ."), intern=T)
-  
-  # Load the file into a dataframe
-  load(name_of_file_in_bucket)
-  
-  if(FALSE){
-  # Source locally
-  load(file = paste0(dir_data, "2d_model_objects", tolower(suffixes[i]), ".RData"))
-  }
-  
+# Get the bucket name
+my_bucket = Sys.getenv('WORKSPACE_BUCKET')
+
+# Copy the file from current workspace to the bucket
+system(paste0("gsutil cp ", my_bucket, "/data/", name_of_file_in_bucket, " ."), intern=T)
+
+# Load the file into a dataframe
+load(name_of_file_in_bucket)
+
+if(FALSE){
+# Source locally
+load(file = paste0(dir_data, "2d_model_objects", ".RData"))
 }
 ```
 
@@ -469,15 +459,46 @@ window_dfs <- lapply(unique(all_results$exposure_window), function(window) {
 ## Combine side by side 
 final_df <- reduce(window_dfs, left_join, by = c("components"))
 
+## Get p-value columns
+pval_cols <- grep("^p_val_", names(final_df), value = TRUE)
+
+## Apply bolding to those columns
+final_df_bold <- final_df
+
+for (col in pval_cols) {
+  final_df_bold[[col]] <- cell_spec(
+    sprintf("%.3f", final_df[[col]]),  # format to 3 decimal places
+    format = "html",
+    bold = final_df[[col]] < 0.05
+  )
+}
+
 ## Save as kable
-result_df_kable <- final_df %>%
-  knitr::kable(., digits = 3, 
+result_df_kable <- final_df_bold %>%
+  knitr::kable(digits = 3, 
                booktabs = TRUE, 
                format = "html", 
-               caption = paste0("Quantile gcomp test sample results")) %>%
-  kable_styling(font_size = 15, fixed_thead = T, bootstrap_options = c("striped", "hover"))
+               escape = FALSE,
+               caption =  paste0("Quantile gcomp test sample results")) %>%
+  kable_styling(font_size = 15, fixed_thead = TRUE, bootstrap_options = c("striped", "hover"))
 
 print(result_df_kable)
+```
+
+```{r}
+# Create kable for hicc
+
+final_df <- rbindlist(results_hicc_list)
+
+result_hicc_kable <- final_df %>%
+  knitr::kable(digits = 3, 
+               booktabs = TRUE, 
+               format = "html", 
+               escape = FALSE,
+               caption = paste0("Quantile gcomp test sample hicc")) %>%
+  kable_styling(font_size = 15, fixed_thead = TRUE, bootstrap_options = c("striped", "hover"))
+
+print(result_hicc_kable)
 ```
 
 
@@ -486,13 +507,39 @@ print(result_df_kable)
 ```{r}
 # Save locally
 save_kable(result_df_kable, paste0(dir_tables, "qgcomp_test_sample_results.html"))
+save_kable(result_hicc_kable, paste0(dir_tables, "qgcomp_test_sample_hicc.html"))
 
-# SAVE IN BUCKET
+# SAVE IN BUCKET: RESULT
 
 file_to_save <- copy(result_df_kable)
 
 # Replace with THE NAME of the file you're going to store in the bucket (don't delete the quotation marks)
 destination_filename = paste0(dir_tables, "qgcomp_test_sample_results.html")
+
+########################################################################
+##
+################# DON'T CHANGE FROM HERE ###############################
+##
+########################################################################
+
+# store the dataframe in current workspace
+save_kable(file_to_save, destination_filename)
+
+# Get the bucket name
+my_bucket = Sys.getenv('WORKSPACE_BUCKET')
+
+# Copy the file from current workspace to the bucket
+system(paste0("gsutil cp ", destination_filename, " ", my_bucket, "/data/"), intern=T)
+
+# Check if file is in the bucket
+system(paste0("gsutil ls ", my_bucket, "/data/*.html"), intern=T)
+
+# SAVE IN BUCKET: HICC
+
+file_to_save <- copy(result_hicc_kable)
+
+# Replace with THE NAME of the file you're going to store in the bucket (don't delete the quotation marks)
+destination_filename = paste0(dir_tables, "qgcomp_test_sample_hicc.html")
 
 ########################################################################
 ##
@@ -835,30 +882,87 @@ results_hicc_list
 ## Get final df
 final_df <- reduce(results_est_list, left_join, by = "components")
 
+## Get p-value columns
+pval_cols <- grep("^p_val_", names(final_df), value = TRUE)
+
+## Apply bolding to those columns
+final_df_bold <- final_df
+
+for (col in pval_cols) {
+  final_df_bold[[col]] <- cell_spec(
+    sprintf("%.3f", final_df[[col]]),  # format to 3 decimal places
+    format = "html",
+    bold = final_df[[col]] < 0.05
+  )
+}
+
 ## Save as kable
-result_df_kable <- final_df %>%
-  knitr::kable(., digits = 3, 
+result_df_kable <- final_df_bold %>%
+  knitr::kable(digits = 3, 
                booktabs = TRUE, 
                format = "html", 
+               escape = FALSE,
                caption = paste0("Quantile gcomp test sample age stratified results")) %>%
-  kable_styling(font_size = 15, fixed_thead = T, bootstrap_options = c("striped", "hover"))
+  kable_styling(font_size = 15, fixed_thead = TRUE, bootstrap_options = c("striped", "hover"))
 
 print(result_df_kable)
 ```
 
+```{r}
+# Create kable for hicc
+
+final_df <- rbindlist(results_hicc_list)
+
+result_hicc_kable <- final_df %>%
+  knitr::kable(digits = 3, 
+               booktabs = TRUE, 
+               format = "html", 
+               escape = FALSE,
+               caption = paste0("Quantile gcomp test sample age stratified hicc")) %>%
+  kable_styling(font_size = 15, fixed_thead = TRUE, bootstrap_options = c("striped", "hover"))
+
+print(result_hicc_kable)
+```
 
 # Export
 
 ```{r}
 # Save locally
 save_kable(result_df_kable, paste0(dir_tables, "qgcomp_test_sample_age_strat_results.html"))
+save_kable(result_hicc_kable, paste0(dir_tables, "qgcomp_test_sample_age_strat_hicc.html"))
 
-# SAVE IN BUCKET
+# SAVE IN BUCKET: RESULT
 
 file_to_save <- copy(result_df_kable)
 
 # Replace with THE NAME of the file you're going to store in the bucket (don't delete the quotation marks)
 destination_filename = paste0(dir_tables, "qgcomp_test_sample_age_strat_results.html")
+
+########################################################################
+##
+################# DON'T CHANGE FROM HERE ###############################
+##
+########################################################################
+
+# store the dataframe in current workspace
+save_kable(file_to_save, destination_filename)
+
+# Get the bucket name
+my_bucket = Sys.getenv('WORKSPACE_BUCKET')
+
+# Copy the file from current workspace to the bucket
+system(paste0("gsutil cp ", destination_filename, " ", my_bucket, "/data/"), intern=T)
+
+# Check if file is in the bucket
+system(paste0("gsutil ls ", my_bucket, "/data/*.html"), intern=T)
+
+
+# SAVE IN BUCKET: HICC
+
+file_to_save <- copy(result_hicc_kable)
+
+# Replace with THE NAME of the file you're going to store in the bucket (don't delete the quotation marks)
+destination_filename = paste0(dir_tables, "qgcomp_test_sample_age_strat_hicc.html")
 
 ########################################################################
 ##

@@ -183,8 +183,8 @@ qgcomp.robust.est <- function(fit.object,
       new_p_val <- 2 * pt(abs(new_coeff/new_se),                    # get tstat by coeff/SE
                              df = fit.object$df.residual,           # degree of freedom is residual degree of freedom from model object
                              lower.tail = FALSE)
-      new_lower_ci <- new_coeff - qnorm(0.975) * new_se
-      new_upper_ci <- new_coeff + qnorm(0.975) * new_se
+      new_lower_ci <- new_coeff - qt(0.975, df = fit.object$df.residual) * new_se
+      new_upper_ci <- new_coeff + qt(0.975, df = fit.object$df.residual) * new_se
   } else {
     if(robust_type %in% HC_types){ # Cluster Robust Estimation
       
@@ -201,8 +201,8 @@ qgcomp.robust.est <- function(fit.object,
       new_p_val <- 2 * pt(abs(new_coeff/new_se),                    # get stat by coeff/SE
                              df = length(unique(cluster_var)) - 1,  # degree of freedom is number of clusters - 1
                              lower.tail = FALSE)
-      new_lower_ci <- new_coeff - qnorm(0.975) * new_se
-      new_upper_ci <- new_coeff + qnorm(0.975) * new_se
+      new_lower_ci <- new_coeff - qt(0.975, df = length(unique(cluster_var)) - 1 ) * new_se
+      new_upper_ci <- new_coeff + qt(0.975, df = length(unique(cluster_var)) - 1) * new_se
       
     } else if (robust_type %in% CR_types){ # Cluster Robust Estimation for CR
       message("Using vcovCR + manual t-test")
@@ -240,8 +240,8 @@ qgcomp.robust.est <- function(fit.object,
       new_p_val <- 2 * pt(abs(new_coeff/new_se),                    # get stat by coeff/SE
                           df = df_satt,                             # degree of freedom is Satterthwaite df
                           lower.tail = FALSE)
-      new_lower_ci <- new_coeff - qnorm(0.975) * new_se
-      new_upper_ci <- new_coeff + qnorm(0.975) * new_se
+      new_lower_ci <- new_coeff - qt(0.975, df = df_satt) * new_se
+      new_upper_ci <- new_coeff + qt(0.975, df = df_satt) * new_se
     }
   } 
     

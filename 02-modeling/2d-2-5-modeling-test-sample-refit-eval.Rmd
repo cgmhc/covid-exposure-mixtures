@@ -479,7 +479,7 @@ result_df_kable <- final_df_bold %>%
                booktabs = TRUE, 
                format = "html", 
                escape = FALSE,
-               caption =  paste0("Quantile gcomp test sample results")) %>%
+               caption =  paste0("Quantile gcomp test sample results refit eval")) %>%
   kable_styling(font_size = 15, fixed_thead = TRUE, bootstrap_options = c("striped", "hover"))
 
 print(result_df_kable)
@@ -506,15 +506,15 @@ print(result_hicc_kable)
 
 ```{r}
 # Save locally
-save_kable(result_df_kable, paste0(dir_tables, "qgcomp_test_sample_results.html"))
-save_kable(result_hicc_kable, paste0(dir_tables, "qgcomp_test_sample_hicc.html"))
+save_kable(result_df_kable, paste0(dir_tables, "qgcomp_test_sample_results_refit_eval.html"))
+save_kable(result_hicc_kable, paste0(dir_tables, "qgcomp_test_sample_hicc_refit_eval.html"))
 
 # SAVE IN BUCKET: RESULT
 
 file_to_save <- copy(result_df_kable)
 
 # Replace with THE NAME of the file you're going to store in the bucket (don't delete the quotation marks)
-destination_filename = paste0(dir_tables, "qgcomp_test_sample_results.html")
+destination_filename = paste0(dir_tables, "qgcomp_test_sample_results_refit_eval.html")
 
 ########################################################################
 ##
@@ -539,7 +539,7 @@ system(paste0("gsutil ls ", my_bucket, "/data/*.html"), intern=T)
 file_to_save <- copy(result_hicc_kable)
 
 # Replace with THE NAME of the file you're going to store in the bucket (don't delete the quotation marks)
-destination_filename = paste0(dir_tables, "qgcomp_test_sample_hicc.html")
+destination_filename = paste0(dir_tables, "qgcomp_test_sample_hicc_refit_eval.html")
 
 ########################################################################
 ##
@@ -902,7 +902,7 @@ result_df_kable <- final_df_bold %>%
                booktabs = TRUE, 
                format = "html", 
                escape = FALSE,
-               caption = paste0("Quantile gcomp test sample age stratified results")) %>%
+               caption = paste0("Quantile gcomp test sample age stratified results refit eval")) %>%
   kable_styling(font_size = 15, fixed_thead = TRUE, bootstrap_options = c("striped", "hover"))
 
 print(result_df_kable)
@@ -918,7 +918,7 @@ result_hicc_kable <- final_df %>%
                booktabs = TRUE, 
                format = "html", 
                escape = FALSE,
-               caption = paste0("Quantile gcomp test sample age stratified hicc")) %>%
+               caption = paste0("Quantile gcomp test sample age stratified hicc refit eval")) %>%
   kable_styling(font_size = 15, fixed_thead = TRUE, bootstrap_options = c("striped", "hover"))
 
 print(result_hicc_kable)
@@ -928,15 +928,15 @@ print(result_hicc_kable)
 
 ```{r}
 # Save locally
-save_kable(result_df_kable, paste0(dir_tables, "qgcomp_test_sample_age_strat_results.html"))
-save_kable(result_hicc_kable, paste0(dir_tables, "qgcomp_test_sample_age_strat_hicc.html"))
+save_kable(result_df_kable, paste0(dir_tables, "qgcomp_test_sample_age_strat_results_refit_eval.html"))
+save_kable(result_hicc_kable, paste0(dir_tables, "qgcomp_test_sample_age_strat_hicc_refit_eval.html"))
 
 # SAVE IN BUCKET: RESULT
 
 file_to_save <- copy(result_df_kable)
 
 # Replace with THE NAME of the file you're going to store in the bucket (don't delete the quotation marks)
-destination_filename = paste0(dir_tables, "qgcomp_test_sample_age_strat_results.html")
+destination_filename = paste0(dir_tables, "qgcomp_test_sample_age_strat_results_refit_eval.html")
 
 ########################################################################
 ##
@@ -962,7 +962,7 @@ system(paste0("gsutil ls ", my_bucket, "/data/*.html"), intern=T)
 file_to_save <- copy(result_hicc_kable)
 
 # Replace with THE NAME of the file you're going to store in the bucket (don't delete the quotation marks)
-destination_filename = paste0(dir_tables, "qgcomp_test_sample_age_strat_hicc.html")
+destination_filename = paste0(dir_tables, "qgcomp_test_sample_age_strat_hicc_refit_eval.html")
 
 ########################################################################
 ##

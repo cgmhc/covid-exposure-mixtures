@@ -212,21 +212,21 @@ for (i in seq_along(period_keys)) {
                          "generalized_anxiety_disorder_before_covid_lifetime",
                          "generalized_anxiety_disorder_1yr_before_covid")
   
-  dynamic_covariates <- c(paste0("C1M_School_closing", suffixes[i]),
-    paste0("C2M_Workplace_closing", suffixes[i]),
-    paste0("C3M_Cancel_public_events", suffixes[i]),
-    paste0("C4M_Restrictions_on_gatherings", suffixes[i]),
-    paste0("C5M_Close_public_transport", suffixes[i]),
-    paste0("C6M_Stay_at_home_requirements", suffixes[i]),
-    paste0("C7M_Restrictions_on_internal_movement", suffixes[i]))
+  dynamic_covariates <- c(paste0("C1M", suffixes[i]),
+    paste0("C2M", suffixes[i]),
+    paste0("C3M", suffixes[i]),
+    paste0("C4M", suffixes[i]),
+    paste0("C5M", suffixes[i]),
+    paste0("C6M", suffixes[i]),
+    paste0("C7M", suffixes[i]))
   
-  exposure_names <- c(paste0("C1M_School_closing", suffixes[i]),
-    paste0("C2M_Workplace_closing", suffixes[i]),
-    paste0("C3M_Cancel_public_events", suffixes[i]),
-    paste0("C4M_Restrictions_on_gatherings", suffixes[i]),
-    paste0("C5M_Close_public_transport", suffixes[i]),
-    paste0("C6M_Stay_at_home_requirements", suffixes[i]),
-    paste0("C7M_Restrictions_on_internal_movement", suffixes[i]))
+  exposure_names <- c(paste0("C1M", suffixes[i]),
+    paste0("C2M", suffixes[i]),
+    paste0("C3M", suffixes[i]),
+    paste0("C4M", suffixes[i]),
+    paste0("C5M", suffixes[i]),
+    paste0("C6M", suffixes[i]),
+    paste0("C7M", suffixes[i]))
   
   full_covariates <- c(static_covariates, dynamic_covariates)
   fml <- as.formula(paste("gad_score_july ~", paste(full_covariates, collapse = " + ")))
@@ -259,25 +259,25 @@ for (i in seq_along(period_keys)) {
   
   ## Print components
   print(cat(" -------------- All Components (", sub("^_", "", suffixes[i]), ") :- --------------------\n", 
-            paste(all_list, collapse = ", \n")))
+            paste(all_list, collapse = "\n")))
   print(cat(" -------------- Positive Components (", sub("^_", "", suffixes[i]), ") :- --------------------\n", 
-            paste(pos_list, collapse = ", \n")))
+            paste(pos_list, collapse = "\n")))
   print(cat(" -------------- Negative Components (", sub("^_", "", suffixes[i]), ") :- --------------------\n", 
-            paste(neg_list, collapse = ", \n")))
+            paste(neg_list, collapse = "\n")))
   
   ## Final exposure list
-  exposure_list <- list(c("C1M_School_closing"), 
-                     c("C2M_Workplace_closing"),
-                     c("C3M_Cancel_public_events"),
-                     c("C4M_Restrictions_on_gatherings"),
-                     c("C5M_Close_public_transport"),
-                     c("C6M_Stay_at_home_requirements"),
-                     c("C7M_Restrictions_on_internal_movement"),
-                     all_list,
-                     pos_list,
-                     neg_list,
-                     c("Stringency")
-                     )
+  exposure_list <- list(c("C1M"), 
+                       c("C2M"),
+                       c("C3M"),
+                       c("C4M"),
+                       c("C5M"),
+                       c("C6M"),
+                       c("C7M"),
+                       all_list,
+                       pos_list,
+                       neg_list,
+                       c("Stringency")
+                       )
   
   # Init results df
   result_est_df <- data.frame()
@@ -286,7 +286,7 @@ for (i in seq_along(period_keys)) {
   # Loop over exposures
   
   # # For check. Uncomment if you want to check
-  # exp = c("C1M_School_closing")
+  # exp = c("C1M")
   
   for(exp in exposure_list){
     
@@ -621,21 +621,21 @@ for (i in seq_along(period_keys)) {
                            "generalized_anxiety_disorder_before_covid_lifetime",
                            "generalized_anxiety_disorder_1yr_before_covid")
     
-    dynamic_covariates <- c(paste0("C1M_School_closing", suffixes[i]),
-      paste0("C2M_Workplace_closing", suffixes[i]),
-      paste0("C3M_Cancel_public_events", suffixes[i]),
-      paste0("C4M_Restrictions_on_gatherings", suffixes[i]),
-      paste0("C5M_Close_public_transport", suffixes[i]),
-      paste0("C6M_Stay_at_home_requirements", suffixes[i]),
-      paste0("C7M_Restrictions_on_internal_movement", suffixes[i]))
-    
-    exposure_names <- c(paste0("C1M_School_closing", suffixes[i]),
-      paste0("C2M_Workplace_closing", suffixes[i]),
-      paste0("C3M_Cancel_public_events", suffixes[i]),
-      paste0("C4M_Restrictions_on_gatherings", suffixes[i]),
-      paste0("C5M_Close_public_transport", suffixes[i]),
-      paste0("C6M_Stay_at_home_requirements", suffixes[i]),
-      paste0("C7M_Restrictions_on_internal_movement", suffixes[i]))
+    dynamic_covariates <- c(paste0("C1M", suffixes[i]),
+      paste0("C2M", suffixes[i]),
+      paste0("C3M", suffixes[i]),
+      paste0("C4M", suffixes[i]),
+      paste0("C5M", suffixes[i]),
+      paste0("C6M", suffixes[i]),
+      paste0("C7M", suffixes[i]))
+  
+    exposure_names <- c(paste0("C1M", suffixes[i]),
+      paste0("C2M", suffixes[i]),
+      paste0("C3M", suffixes[i]),
+      paste0("C4M", suffixes[i]),
+      paste0("C5M", suffixes[i]),
+      paste0("C6M", suffixes[i]),
+      paste0("C7M", suffixes[i]))
     
     full_covariates <- c(static_covariates, dynamic_covariates)
     fml <- as.formula(paste("gad_score_july ~", paste(full_covariates, collapse = " + ")))
@@ -675,13 +675,13 @@ for (i in seq_along(period_keys)) {
               paste(neg_list, collapse = ", \n")))
     
     ## Final exposure list
-    exposure_list <- list(c("C1M_School_closing"), 
-                       c("C2M_Workplace_closing"),
-                       c("C3M_Cancel_public_events"),
-                       c("C4M_Restrictions_on_gatherings"),
-                       c("C5M_Close_public_transport"),
-                       c("C6M_Stay_at_home_requirements"),
-                       c("C7M_Restrictions_on_internal_movement"),
+    exposure_list <- list(c("C1M"), 
+                       c("C2M"),
+                       c("C3M"),
+                       c("C4M"),
+                       c("C5M"),
+                       c("C6M"),
+                       c("C7M"),
                        all_list,
                        pos_list,
                        neg_list,

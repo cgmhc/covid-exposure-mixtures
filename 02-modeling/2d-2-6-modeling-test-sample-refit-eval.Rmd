@@ -1,5 +1,5 @@
 ---
-title: "Modeling Test Sample Evaluation"
+title: "Modeling Test Sample Evaluation: Refit Eval"
 author: "Devon Watts, Pratik Nitin Khadse"
 date: "2025-05-23"
 output:
@@ -479,7 +479,7 @@ result_df_kable <- final_df_bold %>%
                booktabs = TRUE, 
                format = "html", 
                escape = FALSE,
-               caption =  paste0("Quantile gcomp test sample results refit eval")) %>%
+               caption =  paste0("Quantile gcomp test sample results: refit eval")) %>%
   kable_styling(font_size = 15, fixed_thead = TRUE, bootstrap_options = c("striped", "hover"))
 
 print(result_df_kable)
@@ -495,7 +495,7 @@ result_hicc_kable <- final_df %>%
                booktabs = TRUE, 
                format = "html", 
                escape = FALSE,
-               caption = paste0("Quantile gcomp test sample hicc")) %>%
+               caption = paste0("Quantile gcomp test sample hicc: refit eval")) %>%
   kable_styling(font_size = 15, fixed_thead = TRUE, bootstrap_options = c("striped", "hover"))
 
 print(result_hicc_kable)
@@ -902,7 +902,7 @@ result_df_kable <- final_df_bold %>%
                booktabs = TRUE, 
                format = "html", 
                escape = FALSE,
-               caption = paste0("Quantile gcomp test sample age stratified results refit eval")) %>%
+               caption = paste0("Quantile gcomp test sample age stratified results: refit eval")) %>%
   kable_styling(font_size = 15, fixed_thead = TRUE, bootstrap_options = c("striped", "hover"))
 
 print(result_df_kable)
@@ -918,7 +918,7 @@ result_hicc_kable <- final_df %>%
                booktabs = TRUE, 
                format = "html", 
                escape = FALSE,
-               caption = paste0("Quantile gcomp test sample age stratified hicc refit eval")) %>%
+               caption = paste0("Quantile gcomp test sample age stratified hicc: refit eval")) %>%
   kable_styling(font_size = 15, fixed_thead = TRUE, bootstrap_options = c("striped", "hover"))
 
 print(result_hicc_kable)

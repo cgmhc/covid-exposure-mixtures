@@ -64,48 +64,6 @@ source(here::here("2d-qgcomp-custom.R"))
 # Load datasets
 
 
-```{r}
-# Train data
-
-## Define the filename for the train data parquet file
-filename = "train_data_rerandomized.parquet"
-
-## Get the bucket name from the environment
-my_bucket = Sys.getenv('WORKSPACE_BUCKET')
-
-## Copy the .RData file from the bucket to your local working directory
-system(paste0("gsutil cp ", my_bucket, "/data/", filename, " ."), intern = TRUE)
-
-## Check that the file was copied correctly (optional)
-print(list.files())
-
-## Load the RData file into your environment.
-## The load() function returns a character vector with the names of the objects loaded.
-train_data_rerand <- read_parquet(filename)
-```
-
-
-```{r}
-# Test data
-
-## Define the filename for the test data parquet file
-filename = "test_data_rerandomized.parquet"
-
-## Get the bucket name from the environment
-my_bucket = Sys.getenv('WORKSPACE_BUCKET')
-
-## Copy the .RData file from the bucket to your local working directory
-system(paste0("gsutil cp ", my_bucket, "/data/", filename, " ."), intern = TRUE)
-
-## Check that the file was copied correctly (optional)
-print(list.files())
-
-## Load the RData file into your environment.
-## The load() function returns a character vector with the names of the objects loaded.
-test_data_rerand <- read_parquet(filename)
-```
-
-
 # Load data
 
 ```{r}
@@ -347,7 +305,7 @@ for (i in seq_along(period_keys)) {
   
   ## Get train and test splits for modeling
   train_data_df <- cope_auo_july_no_miss_w_stringency %>% filter(train_flag == TRUE)
-  test_data_df <- cope_auo_july_no_miss_w_stringency %>% filter(train_flag == TRUE)
+  test_data_df <- cope_auo_july_no_miss_w_stringency %>% filter(train_flag == FALSE)
   
   ## Create window wise sets
   assign(paste0("train_data_df", tolower(suffixes[i])), copy(train_data_df))

@@ -556,6 +556,13 @@ system(paste0("gsutil cp ", destination_filename, " ", my_bucket, "/data/"), int
 system(paste0("gsutil ls ", my_bucket, "/data/*.html"), intern=T)
 ```
 
+# Viz
+
+```{r}
+
+```
+
+
 # Loop for Age Stratified Modeling
 
 

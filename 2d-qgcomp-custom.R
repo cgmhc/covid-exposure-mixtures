@@ -135,7 +135,8 @@ qgcomp.robust.est <- function(fit.object,
                              cluster_robust = FALSE, 
                              robust_type = "HC1", 
                              cluster_var = NULL, 
-                             exposure_names = NULL){
+                             exposure_names = NULL,
+                             disaggregated = FALSE){
   
   
   ## Check class
@@ -188,21 +189,73 @@ qgcomp.robust.est <- function(fit.object,
   } else {
     if(robust_type %in% HC_types){ # Cluster Robust Estimation
       
-      message("Using vcovCL + manual t-test (df = G - 1)")
       cl_vcov <- sandwich::vcovCL(fit.object, cluster = cluster_var, type = robust_type)
       
       ## Clean: required due to high memory usage
       gc()
       
-      ### Extract robust beta coefficient, p and SE
-      new_coeff <- sum(fit.object$coefficients[exposure_names])     # same as qgcomp object$psi
-      new_se <- sqrt(sum(cl_vcov[exposure_names, exposure_names, 
-                                 drop = FALSE]))                    # square root of covariance
-      new_p_val <- 2 * pt(abs(new_coeff/new_se),                    # get stat by coeff/SE
-                             df = length(unique(cluster_var)) - 1,  # degree of freedom is number of clusters - 1
-                             lower.tail = FALSE)
-      new_lower_ci <- new_coeff - qt(0.975, df = length(unique(cluster_var)) - 1 ) * new_se
-      new_upper_ci <- new_coeff + qt(0.975, df = length(unique(cluster_var)) - 1) * new_se
+      if(!disaggregated){
+        message("Using vcovCL + manual t-test (df = G - 1) aggreagated")
+      
+        ### Extract robust beta coefficient, p and SE
+        new_coeff <- sum(fit.object$coefficients[exposure_names])     # same as qgcomp object$psi
+        new_se <- sqrt(sum(cl_vcov[exposure_names, exposure_names, 
+                                   drop = FALSE]))                    # square root of covariance
+        new_p_val <- 2 * pt(abs(new_coeff/new_se),                    # get stat by coeff/SE
+                               df = length(unique(cluster_var)) - 1,  # degree of freedom is number of clusters - 1
+                               lower.tail = FALSE)
+        new_lower_ci <- new_coeff - qt(0.975, df = length(unique(cluster_var)) - 1 ) * new_se
+        new_upper_ci <- new_coeff + qt(0.975, df = length(unique(cluster_var)) - 1) * new_se
+      } else {
+        message("Using vcovCL + manual t-test (df = G - 1) disaggreagated")
+        
+        ### Extract robust beta coefficient, p and SE
+        new_coeff <- sum(fit.object$coefficients[exposure_names])     # same as qgcomp object$psi
+        new_se <- sqrt(sum(cl_vcov[exposure_names, exposure_names, 
+                                   drop = FALSE]))                    # square root of covariance
+        new_p_val <- 2 * pt(abs(new_coeff/new_se),                    # get stat by coeff/SE
+                            df = length(unique(cluster_var)) - 1,  # degree of freedom is number of clusters - 1
+                            lower.tail = FALSE)
+        new_lower_ci <- new_coeff - qt(0.975, df = length(unique(cluster_var)) - 1 ) * new_se
+        new_upper_ci <- new_coeff + qt(0.975, df = length(unique(cluster_var)) - 1) * new_se
+        
+        ### Get mixture results
+        mixture_df <- data.frame(
+          term = "mixture",
+          beta = new_coeff,
+          std_error = new_se,
+          p_val = new_p_val,
+          lower_ci = new_lower_ci,
+          upper_ci = new_upper_ci,
+          row.names = NULL
+        )
+        
+        ## Add component results
+        individual_df <- do.call(rbind, lapply(exposure_names, function(var) {
+          coeff <- fit.object$coefficients[[var]]
+          se <- sqrt(cl_vcov[var, var])
+          p_val <- 2 * pt(abs(coeff / se), df = length(unique(cluster_var)) - 1, lower.tail = FALSE)
+          lower <- coeff - qt(0.975, df = length(unique(cluster_var)) - 1) * se
+          upper <- coeff + qt(0.975, df = length(unique(cluster_var)) - 1) * se
+          
+          data.frame(
+            term = var,
+            beta = coeff,
+            std_error = se,
+            p_val = p_val,
+            lower_ci = lower,
+            upper_ci = upper,
+            row.names = NULL
+          )
+        }))
+        
+        ### Combine both
+        df <- rbind(mixture_df, individual_df)
+        
+        ### Return
+        return(df)
+        
+      }
       
     } else if (robust_type %in% CR_types){ # Cluster Robust Estimation for CR
       message("Using vcovCR + manual t-test")
@@ -242,6 +295,9 @@ qgcomp.robust.est <- function(fit.object,
                           lower.tail = FALSE)
       new_lower_ci <- new_coeff - qt(0.975, df = df_satt) * new_se
       new_upper_ci <- new_coeff + qt(0.975, df = df_satt) * new_se
+      
+      
+      
     }
   } 
     

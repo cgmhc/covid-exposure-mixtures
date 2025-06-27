@@ -165,8 +165,6 @@ load(file = paste0(dir_data, "2d_model_objects", ".RData"))
 }
 ```
 
-
-
 # Loop for Modeling
 
 
@@ -185,7 +183,7 @@ stringency_keys <- c("march_15_june_30", "march_22_may_23", "april_12_may_23")
 
 results_est_list <- list()
 results_hicc_list <- list()
-
+results_weight_list <- list()
 
 for (i in seq_along(period_keys)) {
   
@@ -287,6 +285,7 @@ for (i in seq_along(period_keys)) {
   # Init results df
   result_est_df <- data.frame()
   result_hicc_df <- data.frame()
+  result_weight_df <- data.frame(exposure = all_list, stringsAsFactors = FALSE)
   
   # Loop over exposures
   
@@ -359,6 +358,27 @@ for (i in seq_along(period_keys)) {
                                         q = NULL,
                                         bayes = FALSE) 
     
+    # Get fitting weights for mixtures
+    if (consolidation_set) {
+      
+      ## combine pos and neg weights into a named vector
+      weights <- c(model_qgcomp$pos.weights, model_qgcomp$neg.weights)
+      
+      ## update names
+      names(weights) <- sub(pattern = paste0(suffixes[i], "$"), replacement = "", names(weights))
+      
+      ## Prepare weight column
+      weight_col <- rep(NA, length(all_list))
+      
+      ## Match cleaned names to exposures
+      matched <- match(all_list, names(weights))
+      weight_col[!is.na(matched)] <- weights[na.omit(matched)]
+      
+      ## update weights
+      result_weight_df[[paste0(consolidation_name, suffixes[i])]] <- weight_col
+      
+    }
+    
     # Get HICC estimates
     ## Extract
     hicc_df <- qgcomp.hicc(fit.object =  model_qgcomp$fit,
@@ -409,12 +429,14 @@ for (i in seq_along(period_keys)) {
   ## Add to main result list
   results_est_list[[sub("^_", "", suffixes[i])]] <- result_est_df
   results_hicc_list[[sub("^_", "", suffixes[i])]] <- result_hicc_df
+  results_weight_list[[sub("^_", "", suffixes[i])]] <- result_weight_df
   
 }
 
 ## View results
 results_est_list
 results_hicc_list
+results_weight_list
 ```
 
 
@@ -497,12 +519,29 @@ result_hicc_kable <- final_df %>%
 print(result_hicc_kable)
 ```
 
+```{r}
+# Create kable for weights
+
+final_df <- reduce(results_weight_list, left_join, by = c("exposure"))
+
+result_weight_kable <- final_df %>%
+  knitr::kable(digits = 3, 
+               booktabs = TRUE, 
+               format = "html", 
+               escape = FALSE,
+               caption = paste0("Quantile gcomp test sample weights direct fit")) %>%
+  kable_styling(font_size = 15, fixed_thead = TRUE, bootstrap_options = c("striped", "hover"))
+
+print(result_weight_kable)
+```
+
 # Export
 
 ```{r}
 # Save locally
 save_kable(result_df_kable, paste0(dir_tables, "qgcomp_test_sample_results_direct_fit.html"))
 save_kable(result_hicc_kable, paste0(dir_tables, "qgcomp_test_sample_hicc_direct_fit.html"))
+save_kable(result_weight_kable, paste0(dir_tables, "qgcomp_test_sample_weight_direct_fit.html"))
 
 # SAVE IN BUCKET: RESULT
 
@@ -555,6 +594,33 @@ system(paste0("gsutil cp ", destination_filename, " ", my_bucket, "/data/"), int
 
 # Check if file is in the bucket
 system(paste0("gsutil ls ", my_bucket, "/data/*.html"), intern=T)
+
+
+# SAVE IN BUCKET: WEIGHT
+
+file_to_save <- copy(result_weight_kable)
+
+# Replace with THE NAME of the file you're going to store in the bucket (don't delete the quotation marks)
+destination_filename = paste0(dir_tables, "qgcomp_test_sample_weight_direct_fit.html")
+
+########################################################################
+##
+################# DON'T CHANGE FROM HERE ###############################
+##
+########################################################################
+
+# store the dataframe in current workspace
+save_kable(file_to_save, destination_filename)
+
+# Get the bucket name
+my_bucket = Sys.getenv('WORKSPACE_BUCKET')
+
+# Copy the file from current workspace to the bucket
+system(paste0("gsutil cp ", destination_filename, " ", my_bucket, "/data/"), intern=T)
+
+# Check if file is in the bucket
+system(paste0("gsutil ls ", my_bucket, "/data/*.html"), intern=T)
+
 ```
 
 

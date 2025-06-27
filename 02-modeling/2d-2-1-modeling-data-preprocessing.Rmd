@@ -99,6 +99,8 @@ load_packages(required_packages)
 dir_data <- here::here(paste0("02-modeling/data/"))
 dir_tables <- here::here(paste0("02-modeling/tables/"))
 dir_viz <- here::here(paste0("02-modeling/viz/"))
+
+
 ```
 
 
@@ -275,8 +277,6 @@ processed = process_all_exposure_windows(combined_exposure_data_clean)
 all_exposure_data = processed$all_exposure_data
 column_map = processed$column_map
 
-# Check colnames
-colnames(all_exposure_data)
 ```
 
 # Combine with conditions
@@ -471,6 +471,53 @@ cat("Training proportion:", round(nrow(train_data) / nrow(cope_auo_full), 3), "\
 cat("Testing proportion:", round(nrow(test_data) / nrow(cope_auo_full), 3), "\n")
 
 ```
+# Map exposure names
+
+```{r}
+# Apply mapping for modeling
+## train
+train_data_modeling <- train_data %>%
+  rename_with(~ {
+    idx = match(., column_map$old_name)
+    ifelse(is.na(idx), ., column_map$new_name[idx])
+  })
+
+## test
+test_data_modeling = test_data %>%
+  rename_with(~ {
+    idx = match(., column_map$old_name)
+    ifelse(is.na(idx), ., column_map$new_name[idx])
+  })
+
+```
+
+
+# Export
+
+
+```{r}
+# # Save locally
+# write_parquet(train_data_modeling, paste0(dir_data, "train_data_strat_pre_randomization.parquet"))
+# write_parquet(test_data_modeling, paste0(dir_data, "test_data_strat_pre_randomization.parquet"))
+```
+
+
+```{r}
+# Save in bucket
+# ## Saving training and testing set pre-randomization
+# write_parquet(train_data, "train_data_strat_pre_randomization.parquet")
+# write_parquet(test_data, "test_data_strat_pre_randomization.parquet")
+
+## Get the bucket name (same as your loading code)
+my_bucket = Sys.getenv('WORKSPACE_BUCKET')
+
+## Copy the files from local directory to the bucket's data folder
+system(paste0("gsutil cp ", 
+              paste0(dir_data, "train_data_strat_pre_randomization.parquet")," ", my_bucket, "/data/"), intern=T)
+system(paste0("gsutil cp ", 
+              paste0(dir_data, "test_data_strat_pre_randomization.parquet"), " ", my_bucket, "/data/"), intern=T)
+```
+
 
 # Comparison: manual vs tidymodels approach
 
@@ -598,6 +645,7 @@ print(stratum_verification)
 # Performing rerandomization with lowest auc
 
 ```{r}
+# Get covariates
 
 cat("=== Rerandomization to determine 'optimal' train/test split ===\n")
 
@@ -804,6 +852,12 @@ cat("Mean absolute standardized mean difference:",
     round(mean(abs(balance_results_pre_rerand$smd), na.rm = TRUE), 3), "\n")
 cat("Number of covariates with |SMD| > 0.1:", 
     sum(abs(balance_results_pre_rerand$smd) > 0.1, na.rm = TRUE), "\n\n")
+```
+
+# Add exposure variables to existing covariates
+
+```{r}
+
 ```
 
 
@@ -1050,7 +1104,11 @@ rerand_results = perform_rerandomization(cope_auo_full, n_randomizations = 20, m
 # Extract optimal split (this overwrites the original train_data and test_data)
 train_data = rerand_results$best_split$train
 test_data = rerand_results$best_split$test
+```
 
+# Map exposure names
+
+```{r}
 # Apply mapping for modeling
 ## train
 train_data_modeling <- train_data %>%

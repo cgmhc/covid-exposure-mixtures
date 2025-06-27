@@ -958,13 +958,13 @@ rhs_new <- if (length(rhs_terms[!rhs_terms %in% exposure_names]) > 0) {
   ""
 }
 
-formula_str <- paste0(lhs, "~", "mixture_score" , "+" , rhs_new)
+formula_str <- paste0(lhs, "~", "mixture_score", rhs_new)
 formula_str
 
 ## Model glm
 # model_test <- lm(data = test_data,formula = formula_str, weights = (observation_wt_col))
 model_mix <- eval(substitute(glm(formula = formula_str, family = "gaussian", data = data_eval, weights = W), list(W = as.name(observation_wt_col))))
-model_mix
+summary(model_mix)
 
 # Return
 ## return object

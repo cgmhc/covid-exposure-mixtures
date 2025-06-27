@@ -137,7 +137,7 @@ combined_exposure_data = combined_exposure_data_clean
 # Train data
 
 ## Define the filename for the train data parquet file
-filename = "train_data_rerandomized.parquet"
+filename = "train_data_strat_pre_randomization.parquet"
 
 ## Get the bucket name from the environment
 my_bucket = Sys.getenv('WORKSPACE_BUCKET')
@@ -150,7 +150,7 @@ print(list.files())
 
 ## Load the RData file into your environment.
 ## The load() function returns a character vector with the names of the objects loaded.
-train_data_rerand <- read_parquet(filename)
+train_data <- read_parquet(filename)
 ```
 
 
@@ -158,7 +158,7 @@ train_data_rerand <- read_parquet(filename)
 # Test data
 
 ## Define the filename for the test data parquet file
-filename = "test_data_rerandomized.parquet"
+filename = "test_data_strat_pre_randomization.parquet"
 
 ## Get the bucket name from the environment
 my_bucket = Sys.getenv('WORKSPACE_BUCKET')
@@ -171,7 +171,7 @@ print(list.files())
 
 ## Load the RData file into your environment.
 ## The load() function returns a character vector with the names of the objects loaded.
-test_data_rerand <- read_parquet(filename)
+test_data <- read_parquet(filename)
 ```
 
 
@@ -234,6 +234,7 @@ add_stringency_to_cope = function(cope_data, stringency_index = "march_15_june_3
 ```
 
 
+
 # Loop for exposure windows
 
 ```{r}
@@ -257,11 +258,11 @@ cope_auo_july_no_miss_w_stringency <- data.frame()
 for (i in seq_along(period_keys)) {
   
   ## Reset train and test flags
-  train_data_rerand = train_data_rerand %>% mutate(train_flag = TRUE)
-  test_data_rerand = test_data_rerand %>% mutate(train_flag = FALSE)
+  train_data = train_data %>% mutate(train_flag = TRUE)
+  test_data = test_data %>% mutate(train_flag = FALSE)
   
   ## Get full data
-  full_sample_data <- bind_rows(train_data_rerand, test_data_rerand)
+  full_sample_data <- bind_rows(train_data, test_data)
   
   ## Print period
   print(paste0("Period: ", period_keys[i]))
@@ -313,7 +314,6 @@ for (i in seq_along(period_keys)) {
   assign(paste0("cope_auo_july_no_miss_w_stringency", tolower(suffixes[i])), copy(cope_auo_july_no_miss_w_stringency))
 }
 ```
-
 
 
 # Export

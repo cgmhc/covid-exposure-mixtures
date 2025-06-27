@@ -364,6 +364,10 @@ for (i in seq_along(period_keys)) {
     model_test <- test_set_eval$model
     test_data_new <- test_set_eval$new_data
     
+    # Add weights before transfer
+    # Add mixture distribution for states, maybe subplot later. chloropleth map for viz at later stages
+    
+    
     # Get HICC estimates
     ## Extract
     hicc_df <- qgcomp.hicc(fit.object =  model_test,

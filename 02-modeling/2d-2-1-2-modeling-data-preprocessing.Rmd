@@ -1,0 +1,2514 @@
+---
+title: "Modeling Data Preprocessing"
+author: "Devon Watts, Pratik Nitin Khadse"
+date: "2025-05-13"
+output:
+  html_document:
+    toc: yes
+    toc_depth: 3
+    toc_float: yes
+---
+
+# Load packages
+
+```{r}
+# Note: In case of dependency issues, Run: update.packages(ask = FALSE, checkBuilt = TRUE)
+# install.packages('rlang')
+
+#' Ensure specified packages are installed and loaded.
+#'
+#' Checks if packages are installed, installs missing ones,
+#' then attempts to load all specified packages. Uses '=' for assignment.
+#'
+#' @param pkg_list A character vector of package names.
+#' @return Invisibly returns a named logical vector indicating load success for each package.
+load_packages = function(pkg_list) {
+  
+  # Ensure package list is unique
+  pkg_list = unique(pkg_list)
+  
+  # Identify installed packages
+  installed_pkgs = rownames(installed.packages())
+  
+  # Find packages that need installation
+  missing_pkgs = pkg_list[!pkg_list %in% installed_pkgs]
+  
+  # Install missing packages if any exist
+  if (length(missing_pkgs) > 0) {
+    message("Installing missing packages: ", paste(missing_pkgs, collapse = ", "))
+    tryCatch({
+      install.packages(missing_pkgs, dependencies = TRUE)
+      # Update the list of known installed packages *after* installation attempt
+      installed_pkgs = rownames(installed.packages()) 
+    }, error = function(e) {
+      warning("Installation failed for some packages: ", conditionMessage(e))
+    })
+  }
+  
+  message("Loading required packages...")
+  # Attempt to load all packages in the list
+  load_status = sapply(pkg_list, function(pkg) {
+    # Check if it's actually installed before trying to load
+    if (pkg %in% installed_pkgs) {
+      # Use require() as it returns TRUE/FALSE, suitable for sapply
+      # suppressPackageStartupMessages keeps the console cleaner
+      loaded = suppressPackageStartupMessages(
+        require(pkg, character.only = TRUE, quietly = TRUE)
+      )
+      if (!loaded) {
+        warning("Failed to load package: ", pkg)
+      }
+      return(loaded)
+    } else {
+      # If it's not in installed_pkgs (even after install attempt)
+      warning("Package '", pkg, "' not found or failed to install. Cannot load.")
+      return(FALSE)
+    }
+  })
+  
+  # Report final status
+  if (all(load_status)) {
+    message("All required packages loaded successfully.")
+  } else {
+    failed_pkgs = names(load_status[!load_status])
+    warning("Failed to load or install the following packages: ",
+            paste(failed_pkgs, collapse = ", "), ".")
+  }
+  
+  # Return the status invisibly (useful for checking programmatically if needed)
+  invisible(load_status)
+}
+
+
+# --- Usage ---
+
+# Define the list of required packages
+required_packages = c('tidyverse', 'haven', 'qgcomp', 'dplyr', 'ggplot2', 'moments', 
+             'naniar', 'VIM', 'missForest', 'tidymodels', 'purrr', 'gridExtra', 
+             'knitr', 'infotheo', 'igraph', 'ggraph', 'lubridate', 'zoo', 
+             'ggridges', 'slider', 'stats', 'reshape2', 'broom', 'gridExtra',
+             'modelsummary', 'sandwich', 'tidyverse', 'arrow', 'pROC', 'tidyr')
+
+# Run the function to install (if needed) and load the packages
+load_packages(required_packages)
+```
+
+
+```{r}
+# Directory paths
+dir_data <- here::here(paste0("02-modeling/data/"))
+dir_tables <- here::here(paste0("02-modeling/tables/"))
+dir_viz <- here::here(paste0("02-modeling/viz/"))
+
+
+```
+
+
+# Load data
+
+```{r}
+# This snippet assumes that you run setup first
+
+# This code copies a file from your Google Bucket into a dataframe
+
+# replace 'test.csv' with the name of the file in your google bucket (don't delete the quotation marks)
+name_of_file_in_bucket = 'mvp_2d_0725.csv'
+
+########################################################################
+##
+################# DON'T CHANGE FROM HERE ###############################
+##
+########################################################################
+
+# Get the bucket name
+my_bucket = Sys.getenv('WORKSPACE_BUCKET')
+
+# Copy the file from current workspace to the bucket
+system(paste0("gsutil cp ", my_bucket, "/data/", name_of_file_in_bucket, " ."), intern=T)
+
+# Load the file into a dataframe
+cope_auo  = read_csv(name_of_file_in_bucket)
+head(cope_auo)
+
+# Load the parquet file
+parquet_filename = 'df_consensus_with_distributions_wald_final.parquet'
+system(paste0("gsutil cp ", my_bucket, "/data/", parquet_filename, " ."), intern=T)
+conditions_df = read_parquet(parquet_filename)
+head(conditions_df)
+str(conditions_df) # 413,360 in df_consensus_with_distributions_wald_final.parquet
+
+# Converting character columns to factors
+cope_auo$RegionName           = as.factor(cope_auo$RegionName)
+cope_auo$gender               = as.factor(cope_auo$gender)
+cope_auo$has_health_insurance = as.factor(cope_auo$has_health_insurance)
+cope_auo$have_job             = as.factor(cope_auo$have_job)
+cope_auo$college_graduated    = as.factor(cope_auo$college_graduated)
+cope_auo$has_health_insurance = as.factor(cope_auo$has_health_insurance)
+cope_auo$age_bin              = as.factor(cope_auo$age_bin)
+cope_auo$household_income_cat = as.factor(cope_auo$household_income_cat)
+cope_auo$race                 = as.factor(cope_auo$race)
+cope_auo$zip_code             = as.factor(cope_auo$zip_code)
+cope_auo$home_ownership       = as.factor(cope_auo$home_ownership)
+
+# Change column names to use underscores instead of spaces
+colnames(cope_auo) = gsub(" ", "_", colnames(cope_auo))
+
+# Define the filename for the combined exposure data (an .RData file)
+exposure_filename = "combined_exposure_data_final_average.RData"
+
+# Get the bucket name from the environment
+my_bucket = Sys.getenv('WORKSPACE_BUCKET')
+
+# Copy the .RData file from the bucket to your local working directory
+system(paste0("gsutil cp ", my_bucket, "/data/", exposure_filename, " ."), intern = TRUE)
+
+# Check that the file was copied correctly (optional)
+print(list.files())
+
+# Load the RData file into your environment.
+# The load() function returns a character vector with the names of the objects loaded.
+loaded_objs = load(exposure_filename)
+# print(loaded_objs)
+# str(combined_exposure_data_clean)
+```
+
+# Process exposure windows
+
+```{r}
+count_unique_subjects = function(exposure_data) {
+  # Create a data frame to store results
+  results = data.frame(
+    window = character(),
+    start_date = as.Date(character()),
+    end_date = as.Date(character()),
+    duration = numeric(),
+    n_subjects = numeric(),
+    stringsAsFactors = FALSE
+  )
+  
+  # Loop through all time windows
+  for (window_name in names(exposure_data)) {
+    window = exposure_data[[window_name]]
+    
+    # Count unique person_ids
+    n_unique = length(unique(window$data$person_id))
+    
+    # Add to results
+    results = rbind(results, data.frame(
+      window = window_name,
+      start_date = window$start_date,
+      end_date = window$end_date,
+      duration = window$duration,
+      n_subjects = n_unique,
+      stringsAsFactors = FALSE
+    ))
+  }
+  
+  # Order by start date and duration
+  results = results[order(results$start_date, results$duration), ]
+  
+  return(results)
+}
+
+# Usage
+subject_counts = count_unique_subjects(combined_exposure_data_clean)
+
+
+# Step 1: Process ALL exposure windows from combined_exposure_data
+process_all_exposure_windows = function(combined_exposure_data_clean) {
+  # Create empty list to store processed windows
+  all_windows = list()
+  column_map_list = list()
+  
+  # Process each exposure window
+  for(window_name in names(combined_exposure_data_clean)) {
+    window_data = combined_exposure_data_clean[[window_name]]
+    
+    # Extract window metadata
+    start_date = format(window_data$start_date, "%Y%m%d")
+    duration = window_data$duration
+    
+    if(FALSE){ ### Updated to match original window names
+    suffix = paste0("_", start_date, "_", duration, "d")
+    }
+    
+    # Get suffix
+    suffix_old = paste0("_", start_date, "_", duration, "d")
+    suffix_new = paste0("_", sub("_dur\\d+$", "", window_name))
+    
+    
+    # Process policy columns
+    window_df = window_data$data %>%
+      select(person_id, 
+             C1M_School_closing,
+             C2M_Workplace_closing,
+             C3M_Cancel_public_events,
+             C4M_Restrictions_on_gatherings,
+             C5M_Close_public_transport,
+             C6M_Stay_at_home_requirements,
+             C7M_Restrictions_on_internal_movement) %>%
+      # Modified rename to match the expected pattern in policy_impact_regression
+      rename_with(~ paste0(str_extract(., "^C[1-7]M"), suffix_old), -person_id)
+    
+    old_names = names(window_df)[names(window_df) != "person_id"]
+    new_names = str_replace(string = old_names, pattern = suffix_old, replacement = suffix_new)
+    
+    column_map_list[[window_name]] = data.frame(
+      old_name = old_names,
+      new_name = new_names,
+      stringsAsFactors = FALSE
+    )
+      
+    all_windows[[window_name]] = window_df
+  }
+    
+    merged_df = reduce(all_windows, full_join, by = "person_id")
+    column_map_df = bind_rows(column_map_list)
+    
+    return(list(
+      all_exposure_data = merged_df,
+      column_map = column_map_df
+    ))
+  
+}
+
+# Process all 120 exposure windows
+processed = process_all_exposure_windows(combined_exposure_data_clean)
+all_exposure_data = processed$all_exposure_data
+column_map = processed$column_map
+
+```
+
+# Combine with conditions
+```{r}
+## Combining cope_auo data with conditions_df
+# Creating a merged dataset using columns of interest from cope_auo_unique and conditions_df
+# Note that conditions_df contains the propensity score values and some covariates of interest
+cope_auo_unique = cope_auo %>%
+  distinct(person_id, .keep_all = TRUE) %>%
+  rename_with(~ gsub(" ", "_", .x))
+
+cope_auo_ps = cope_auo_unique %>%
+  select(
+    person_id,
+    RegionName,
+    StringencyIndex_Average_202005,
+    gad_score_avg_july,
+    date_of_birth,
+    age_2020,
+    C1M_School_closing,
+    C2M_Workplace_closing,
+    C3M_Cancel_public_events,
+    C4M_Restrictions_on_gatherings,
+    C5M_Close_public_transport,
+    C6M_Stay_at_home_requirements,
+    C7M_Restrictions_on_internal_movement,
+    gad_score_july,
+    gad_score_avg_may,
+    gad_score_may,
+    gad_score_avg_june,
+    gad_score_june
+  ) %>%
+  inner_join(
+    conditions_df %>% 
+      select(
+        person_id,
+        anxiety_disorder_before_covid_lifetime,
+        generalized_anxiety_disorder_before_covid_lifetime,
+        anxiety_disorder_1yr_before_covid,
+        generalized_anxiety_disorder_1yr_before_covid,
+        response_prob,
+        observation_wt,
+        observation_wt_trim,
+        sex,
+        education,
+        employment,
+        insurance,
+        home,
+        income,
+        maritalstatus,
+        race,
+        birthplace
+      ),
+    by = "person_id"
+  ) %>%
+  mutate(
+    log_observation_wt = log(observation_wt)
+  )
+
+
+# Merge cope_auo with conditions_df using person_id
+cope_auo_full = cope_auo_ps %>%
+  select(person_id, RegionName, gad_score_avg_july, gad_score_july, age_2020,
+         age_2020, home, maritalstatus, race, education, employment,
+         insurance, anxiety_disorder_before_covid_lifetime, anxiety_disorder_1yr_before_covid,
+         sex, birthplace, generalized_anxiety_disorder_before_covid_lifetime,
+         generalized_anxiety_disorder_1yr_before_covid, observation_wt_trim) %>%
+  inner_join(all_exposure_data, by = "person_id")
+
+```
+
+# Cluster grouping for train test split
+```{r}
+# Create stratified train/test split based on GAD-7 outcome (50/50)
+# Create GAD-7 quartile bins
+gad_quantiles = quantile(cope_auo_full$gad_score_july, probs = 0:3/3, na.rm = TRUE)
+print(gad_quantiles) # 0, 1, 5, 21
+
+# Create GAD-7 tertile bins using quantile values (specified above)
+cope_auo_full$gad_category = cut(cope_auo_full$gad_score_july,
+                                 breaks = c(0, 1, 5, 21),
+                                 labels = c("None", "Minimal", "Mild_Severe"),
+                                 include.lowest = TRUE, right = FALSE)
+
+cope_auo_full$gad_category = cut(cope_auo_full$gad_score_july,
+                                 breaks = c(0, 5, 15, 21),
+                                 labels = c("Minimal", "Mild", "Moderate_Severe"),
+                                 include.lowest = TRUE, right = FALSE)
+
+# Check for missing values in gad_category after cut()
+cat("Checking for missing values in gad_category after cut() function:\n")
+gad_category_table = table(cope_auo_full$gad_category, useNA = "ifany")
+print(gad_category_table)
+
+# Check if there are any missing values
+missing_count = sum(is.na(cope_auo_full$gad_category))
+cat("Number of missing values in gad_category:", missing_count, "\n")
+
+if(missing_count > 0) {
+  warning("Missing values detected in gad_category. Investigating...")
+  # Show which original GAD scores led to missing categories
+  missing_gad_scores = cope_auo_full$gad_score_july[is.na(cope_auo_full$gad_category)]
+  cat("Original GAD scores that resulted in missing categories:\n")
+  print(summary(missing_gad_scores))
+} else {
+  cat("✓ No missing values in gad_category after cut() function\n")
+}
+cat("\n")
+
+# Identify states with sufficient sample sizes for individual stratification
+large_states = cope_auo_full %>%
+  count(RegionName) %>%
+  filter(n >= 400) %>%  # Conservative threshold for adequate severe cases
+  pull(RegionName)
+
+
+# Create grouping across US regions 
+cope_auo_full$region_grouped = case_when(
+  cope_auo_full$RegionName %in% large_states ~ as.character(cope_auo_full$RegionName),
+  cope_auo_full$RegionName %in% c("Maine", "New Hampshire", "Vermont", "Rhode Island", "Connecticut") ~ "New_England",
+  cope_auo_full$RegionName %in% c("Delaware", "Maryland", "Virginia", "West Virginia", "Kentucky", "Tennessee") ~ "Mid_Atlantic_South",
+  cope_auo_full$RegionName %in% c("North Carolina", "South Carolina", "Georgia", "Alabama", "Mississippi", "Louisiana", "Arkansas") ~ "Southeast",
+  cope_auo_full$RegionName %in% c("Indiana", "Missouri", "Iowa", "Kansas", "Nebraska", "North Dakota", "South Dakota") ~ "Midwest_Plains",
+  cope_auo_full$RegionName %in% c("Montana", "Wyoming", "Colorado", "Utah", "Idaho", "Nevada", "New Mexico") ~ "Mountain_West",
+  cope_auo_full$RegionName %in% c("Oregon", "Washington", "Alaska", "Hawaii") ~ "Pacific_Northwest",
+  TRUE ~ "Other_States"
+)
+
+# Create combined stratification variable
+cope_auo_full$strata_var = paste(cope_auo_full$region_grouped, cope_auo_full$gad_category, sep = "_")
+
+# Check for any remaining small strata
+strata_counts = table(cope_auo_full$strata_var)
+small_strata = strata_counts[strata_counts < 20]
+if(length(small_strata) > 0) {
+  print("Remaining small strata:")
+  print(small_strata)
+}
+```
+
+# Initial Split
+
+```{r}
+# The initial_split() function from rsample failed to execute stratified sampling despite multiple attempts to consolidate regional groupings and adjust the pool parameter. 
+# The function's default behavior requires a minimum threshold of observations within each stratum that appears to be overly conservative for our purposes.
+# This issue persisted, even with pool = 0.1, which should allow strata representing as little as 10% of the dataset.
+#
+# This manual implementation addresses these limitations by ensuring that each combination of geographic region (region_grouped) and GAD-7 category (gad_category) maintains 
+# proportional representation across training and testing datasets. 
+# The floor() function determines training set sizes within  ach stratum by rounding down to the nearest integer, which prevents fractional allocations 
+# This also ensures that smaller strata contribute at least some observations to both datasets when possible.
+#
+# Set seed for reproducibility
+set.seed(42)
+
+# Load required libraries (add purrr for map_dfr function)
+library(purrr)
+
+# Manual stratified sampling split
+stratified_data = cope_auo_full %>%
+  
+  # Group observations by geographic region and anxiety severity level
+  group_by(region_grouped, gad_category) %>%
+  
+  # Randomly shuffle observations within each combination of region and GAD category
+  # This prevents any bias from the ordering of rows in the original data 
+  mutate(random_order = runif(n())) %>%
+  arrange(random_order) %>%
+  
+  # Determine how many observations from each stratum go to training vs testing
+  # Using floor ensures we get whole numbers and maintain the 50/50 split intention
+  mutate(
+    stratum_size = n(),
+    train_size = floor(stratum_size * 0.50),
+    train_flag = row_number() <= train_size
+  ) %>%
+  ungroup()
+
+# Creating training and testing datasets
+train_data = stratified_data %>% filter(train_flag == TRUE)
+test_data = stratified_data %>% filter(train_flag == FALSE)
+
+# STORE PRE-RERANDOMIZATION DATASETS FOR COMPARISON
+train_data_pre_rerand = train_data
+test_data_pre_rerand = test_data
+
+# Display overall split sizes
+cat("Total observations:", nrow(cope_auo_full), "\n")
+cat("Training set:", nrow(train_data), "\n") 
+cat("Testing set:", nrow(test_data), "\n")
+cat("Training proportion:", round(nrow(train_data) / nrow(cope_auo_full), 3), "\n")
+cat("Testing proportion:", round(nrow(test_data) / nrow(cope_auo_full), 3), "\n")
+
+```
+# Map exposure names
+
+```{r}
+# Apply mapping for modeling
+## train
+train_data_modeling <- train_data %>%
+  rename_with(~ {
+    idx = match(., column_map$old_name)
+    ifelse(is.na(idx), ., column_map$new_name[idx])
+  })
+
+## test
+test_data_modeling = test_data %>%
+  rename_with(~ {
+    idx = match(., column_map$old_name)
+    ifelse(is.na(idx), ., column_map$new_name[idx])
+  })
+
+```
+
+
+# Export
+
+
+```{r}
+# # Save locally
+# write_parquet(train_data_modeling, paste0(dir_data, "train_data_strat_pre_randomization.parquet"))
+# write_parquet(test_data_modeling, paste0(dir_data, "test_data_strat_pre_randomization.parquet"))
+```
+
+
+```{r}
+# Save in bucket
+# ## Saving training and testing set pre-randomization
+# write_parquet(train_data, "train_data_strat_pre_randomization.parquet")
+# write_parquet(test_data, "test_data_strat_pre_randomization.parquet")
+
+## Get the bucket name (same as your loading code)
+my_bucket = Sys.getenv('WORKSPACE_BUCKET')
+
+## Copy the files from local directory to the bucket's data folder
+system(paste0("gsutil cp ", 
+              paste0(dir_data, "train_data_strat_pre_randomization.parquet")," ", my_bucket, "/data/"), intern=T)
+system(paste0("gsutil cp ", 
+              paste0(dir_data, "test_data_strat_pre_randomization.parquet"), " ", my_bucket, "/data/"), intern=T)
+```
+
+
+# Comparison: manual vs tidymodels approach
+
+```{r}
+
+# Adding tidymodels approach for comparison
+set.seed(42)
+data_split_tidymodels = initial_split(cope_auo_full, prop = 0.50, strata = "strata_var", pool = 0.05)
+train_data_tidymodels = training(data_split_tidymodels)
+test_data_tidymodels = testing(data_split_tidymodels)
+
+# Comparing overall split sizes
+cat("Manual Method - Training:", nrow(train_data), "Testing:", nrow(test_data), "\n")
+cat("Tidymodels Method - Training:", nrow(train_data_tidymodels), "Testing:", nrow(test_data_tidymodels), "\n\n")
+```
+
+# Verification
+
+```{r}
+# Verify stratification across regions - comparing both methods 
+# Counts and proportions are kept separate for better readability 
+verifying_state_stratification_counts = bind_rows(
+  # Manual method results
+  train_data %>% 
+    count(region_grouped) %>% 
+    mutate(method = "manual", dataset = "training"),
+  test_data %>% 
+    count(region_grouped) %>% 
+    mutate(method = "manual", dataset = "testing"),
+  # Tidymodels method results
+  train_data_tidymodels %>% 
+    count(region_grouped) %>% 
+    mutate(method = "tidymodels", dataset = "training"),
+  test_data_tidymodels %>% 
+    count(region_grouped) %>% 
+    mutate(method = "tidymodels", dataset = "testing")
+) %>%
+  select(region_grouped, method, dataset, n) %>%
+  pivot_wider(names_from = c(method, dataset), values_from = n, names_sep = "_")
+
+verifying_state_stratification_proportions = bind_rows(
+  # Manual method results
+  train_data %>% 
+    count(region_grouped) %>% 
+    mutate(method = "manual", dataset = "training", proportion = n / sum(n)),
+  test_data %>% 
+    count(region_grouped) %>% 
+    mutate(method = "manual", dataset = "testing", proportion = n / sum(n)),
+  # Tidymodels method results
+  train_data_tidymodels %>% 
+    count(region_grouped) %>% 
+    mutate(method = "tidymodels", dataset = "training", proportion = n / sum(n)),
+  test_data_tidymodels %>% 
+    count(region_grouped) %>% 
+    mutate(method = "tidymodels", dataset = "testing", proportion = n / sum(n))
+) %>%
+  select(region_grouped, method, dataset, proportion) %>%
+  pivot_wider(names_from = c(method, dataset), values_from = proportion, names_sep = "_")
+
+# print("Regional Stratification - Sample Counts:")
+# print(verifying_state_stratification_counts)
+# print("Regional Stratification - Proportions:")
+# print(verifying_state_stratification_proportions)
+
+# Verify stratification across GAD-7 categories - comparing both methods
+gad_verification_counts = bind_rows(
+  # Manual method results
+  train_data %>% 
+    count(gad_category) %>% 
+    mutate(method = "manual", dataset = "training"),
+  test_data %>% 
+    count(gad_category) %>% 
+    mutate(method = "manual", dataset = "testing"),
+  # Tidymodels method results
+  train_data_tidymodels %>% 
+    count(gad_category) %>% 
+    mutate(method = "tidymodels", dataset = "training"),
+  test_data_tidymodels %>% 
+    count(gad_category) %>% 
+    mutate(method = "tidymodels", dataset = "testing")
+) %>%
+  select(gad_category, method, dataset, n) %>%
+  pivot_wider(names_from = c(method, dataset), values_from = n, names_sep = "_")
+
+gad_verification_proportions = bind_rows(
+  # Manual method results
+  train_data %>% 
+    count(gad_category) %>% 
+    mutate(method = "manual", dataset = "training", proportion = n / sum(n)),
+  test_data %>% 
+    count(gad_category) %>% 
+    mutate(method = "manual", dataset = "testing", proportion = n / sum(n)),
+  # Tidymodels method results
+  train_data_tidymodels %>% 
+    count(gad_category) %>% 
+    mutate(method = "tidymodels", dataset = "training", proportion = n / sum(n)),
+  test_data_tidymodels %>% 
+    count(gad_category) %>% 
+    mutate(method = "tidymodels", dataset = "testing", proportion = n / sum(n))
+) %>%
+  select(gad_category, method, dataset, proportion) %>%
+  pivot_wider(names_from = c(method, dataset), values_from = proportion, names_sep = "_")
+
+# print("GAD-7 Category Stratification - Sample Counts:")
+# print(gad_verification_counts)
+# print("GAD-7 Category Stratification - Proportions:")
+# print(gad_verification_proportions)
+
+# Verify stratification within each stratum - manual method only
+stratum_verification = stratified_data %>%
+  group_by(region_grouped, gad_category) %>%
+  summarise(
+    total_n = n(),
+    train_n = sum(train_flag),
+    test_n = sum(!train_flag),
+    train_prop = mean(train_flag),
+    .groups = "drop"
+  ) %>%
+  arrange(total_n)
+
+print("Stratum-Level Verification (Manual Method):")
+stratum_verification
+```
+
+# Performing rerandomization with lowest auc
+
+# Get covariates
+
+```{r}
+# Get covariates
+
+cat("=== Rerandomization to determine 'optimal' train/test split ===\n")
+
+# Define list of covariates for balance assessment
+# These are the key predictors we want balanced between train/test sets
+balance_covariates = c(
+  "age_2020", "home", "maritalstatus", "race", "education", "employment", 
+  "insurance", "anxiety_disorder_before_covid_lifetime", "anxiety_disorder_1yr_before_covid", 
+  "sex", "birthplace", "generalized_anxiety_disorder_before_covid_lifetime",
+  "generalized_anxiety_disorder_1yr_before_covid", "gad_score_july",
+  "observation_wt_trim"
+)
+
+# Check which covariates exist in the data
+existing_covariates = intersect(balance_covariates, names(cope_auo_full))
+missing_covariates = setdiff(balance_covariates, names(cope_auo_full))
+
+if(length(missing_covariates) > 0) {
+  cat("Missing covariates for balance analysis:", paste(missing_covariates, collapse = ", "), "\n")
+}
+
+cat("Analyzing balance for", length(existing_covariates), "covariates:\n")
+cat(paste(existing_covariates, collapse = ", "), "\n\n")
+```
+```{r}
+# Get existing covariates with exposure variables
+
+exposure_covariates <- grep("^C[1-7]", names(cope_auo_full), value = TRUE)
+full_covariates <- c(existing_covariates, exposure_covariates)
+
+```
+
+
+
+# Balance stats
+
+```{r}
+#' Calculate balance statistics for train/test split
+#' 
+#' This function computes standardized mean differences (SMD), variance ratios,
+#' and distributional tests for all covariates. For continuous/binary variables,
+#' it calculates SMD and Kolmogorov-Smirnov tests. For categorical variables,
+#' it performs chi-square tests and calculates Cramér's V effect sizes.
+#' 
+#' @param train_data Training dataset
+#' @param test_data Test dataset
+#' @param covariates Vector of covariate names to assess
+#' @return List with balance_results tibble and categorical_results list
+calculate_balance = function(train_data, test_data, covariates) {
+  balance_results = tibble()
+  categorical_results = list()
+  
+  for(var in covariates) {
+    # Skip variables not present in both datasets
+    if(!var %in% names(train_data) || !var %in% names(test_data)) {
+      next
+    }
+    
+    train_var = train_data[[var]]
+    test_var = test_data[[var]]
+    
+    # Remove missing values for statistical calculations
+    train_complete = train_var[!is.na(train_var)]
+    test_complete = test_var[!is.na(test_var)]
+    
+    if(length(train_complete) == 0 || length(test_complete) == 0) {
+      next
+    }
+    
+    if(is.numeric(train_var) && is.numeric(test_var)) {
+      # CONTINUOUS VARIABLE ANALYSIS
+      mean_train = mean(train_complete)
+      mean_test = mean(test_complete)
+      var_train = var(train_complete)
+      var_test = var(test_complete)
+      
+      # Calculate pooled standard deviation for SMD
+      pooled_sd = sqrt((var_train + var_test) / 2)
+      
+      # Standardized Mean Difference: effect size independent of units
+      smd = (mean_train - mean_test) / pooled_sd
+      
+      # Variance ratio: should be close to 1 for good balance
+      variance_ratio = var_train / var_test
+      
+      # Kolmogorov-Smirnov test: compares full distributions
+      # Note: Warnings about ties are normal for discrete/integer data
+      ks_test = suppressWarnings(ks.test(train_complete, test_complete))
+      
+      balance_results = bind_rows(balance_results, tibble(
+        variable = var,
+        type = "continuous",
+        mean_train = mean_train,
+        mean_test = mean_test,
+        var_train = var_train,
+        var_test = var_test,
+        smd = smd,
+        abs_smd = abs(smd),
+        variance_ratio = variance_ratio,
+        ks_statistic = ks_test$statistic,
+        ks_p_value = ks_test$p.value,
+        n_train = length(train_complete),
+        n_test = length(test_complete)
+      ))
+      
+    } else {
+      # CATEGORICAL VARIABLE ANALYSIS
+      train_factor = factor(train_complete)
+      test_factor = factor(test_complete)
+      
+      # Ensure both factors have same levels for comparison
+      all_levels = unique(c(levels(train_factor), levels(test_factor)))
+      train_factor = factor(train_complete, levels = all_levels)
+      test_factor = factor(test_complete, levels = all_levels)
+      
+      if(length(all_levels) == 2) {
+        # BINARY CATEGORICAL: Calculate SMD for proportions
+        prop_train = mean(train_factor == all_levels[1])
+        prop_test = mean(test_factor == all_levels[1])
+        
+        # SMD for binary variables using pooled proportion
+        pooled_prop = (prop_train + prop_test) / 2
+        pooled_se = sqrt(pooled_prop * (1 - pooled_prop))
+        smd = (prop_train - prop_test) / pooled_se
+        
+        balance_results = bind_rows(balance_results, tibble(
+          variable = var,
+          type = "binary",
+          mean_train = prop_train,
+          mean_test = prop_test,
+          var_train = NA,
+          var_test = NA,
+          smd = smd,
+          abs_smd = abs(smd),
+          variance_ratio = NA,
+          ks_statistic = NA,
+          ks_p_value = NA,
+          n_train = length(train_complete),
+          n_test = length(test_complete)
+        ))
+      } else {
+        # MULTI-LEVEL CATEGORICAL: Use chi-square test and Cramér's V
+        combined_data = data.frame(
+          group = factor(c(rep("train", length(train_complete)), 
+                           rep("test", length(test_complete)))),
+          variable = factor(c(train_complete, test_complete), levels = all_levels)
+        )
+        
+        tryCatch({
+          # Chi-square test for independence of variable and group
+          chi_test = chisq.test(table(combined_data$variable, combined_data$group))
+          
+          # Cramér's V: effect size measure for categorical associations
+          n = nrow(combined_data)
+          cramers_v = sqrt(chi_test$statistic / (n * (min(length(all_levels), 2) - 1)))
+          
+          categorical_results[[var]] = list(
+            variable = var,
+            type = "categorical",
+            n_levels = length(all_levels),
+            chi_square = chi_test$statistic,
+            chi_p_value = chi_test$p.value,
+            cramers_v = as.numeric(cramers_v),
+            train_table = table(train_factor),
+            test_table = table(test_factor),
+            n_train = length(train_complete),
+            n_test = length(test_complete)
+          )
+        }, error = function(e) {
+          categorical_results[[var]] = list(
+            variable = var,
+            type = "categorical_error",
+            error = e$message,
+            n_train = length(train_complete),
+            n_test = length(test_complete)
+          )
+        })
+        
+        # Add placeholder row in main results for categorical variables
+        balance_results = bind_rows(balance_results, tibble(
+          variable = var,
+          type = "categorical",
+          mean_train = NA,
+          mean_test = NA,
+          var_train = NA,
+          var_test = NA,
+          smd = NA,
+          abs_smd = NA,
+          variance_ratio = NA,
+          ks_statistic = NA,
+          ks_p_value = NA,
+          n_train = length(train_complete),
+          n_test = length(test_complete)
+        ))
+      }
+    }
+  }
+  
+  return(list(
+    balance_results = balance_results,
+    categorical_results = categorical_results
+  ))
+}
+```
+
+### Calculate for all exposures
+```{r}
+cat("=== Calculating for All Exposures  ===\n")
+cat("=== Calculating balance for pre-rerandomization split  ===\n")
+balance_analysis_pre_rerand = calculate_balance(train_data_pre_rerand, test_data_pre_rerand, full_covariates)
+balance_results_pre_rerand = balance_analysis_pre_rerand$balance_results
+categorical_results_pre_rerand = balance_analysis_pre_rerand$categorical_results
+
+cat("Pre-rerandomization balance summary:\n")
+cat("Mean absolute standardized mean difference:", 
+    round(mean(abs(balance_results_pre_rerand$smd), na.rm = TRUE), 3), "\n")
+cat("Number of covariates with |SMD| > 0.1:", 
+    sum(abs(balance_results_pre_rerand$smd) > 0.1, na.rm = TRUE), "\n\n")
+```
+
+
+### Calculate for each exposure window
+
+```{r}
+# Extract all time windows
+
+## Get existing covariates with exposure variables
+exposure_covariates <- grep("^C[1-7]", names(cope_auo_full), value = TRUE)
+
+## Extract all suffixes
+time_suffixes <- unique(str_extract(exposure_covariates, "(?<=C[1-7]M_)\\d{8}_\\d+d"))
+
+## Remove NA if any
+time_suffixes <- time_suffixes[!is.na(time_suffixes)]
+```
+
+
+```{r}
+
+cat("=== Calculating for Each Exposure Window  ===\n")
+
+# Init result df
+balance_summary_df <- data.frame()
+
+for (suffix in time_suffixes) {
+  ## Print window
+  print(paste("Now processing:", suffix))
+  
+  ## Get exposure covariates per window
+  exposure_coviarates_window <- paste0("C", 1:7, "M_", suffix)
+  
+  ## Safety check: skip if any variable not present
+  if (!all(exposure_coviarates_window %in% exposure_covariates)){
+    print(paste0("Not present: ", suffix))
+  }
+  
+  ## Extract subset
+  full_covariates <- c(balance_covariates, exposure_coviarates_window)
+  
+  ## Calculates balance stats
+  cat("=== Calculating balance for pre-rerandomization split ===\n")
+  balance_analysis_pre_rerand = calculate_balance(train_data_pre_rerand, test_data_pre_rerand, full_covariates)
+  balance_results_pre_rerand = balance_analysis_pre_rerand$balance_results
+  categorical_results_pre_rerand = balance_analysis_pre_rerand$categorical_results
+  
+  ## Compute summary stats
+  mean_abs_smd <- round(mean(abs(balance_results_pre_rerand$smd), na.rm = TRUE), 3)
+  ncov_smd_greater_than_0.1 <- sum(abs(balance_results_pre_rerand$smd) > 0.1, na.rm = TRUE)
+  
+  ## Update dataframe
+  balance_summary_df <- rbind(
+    balance_summary_df,
+    data.frame(
+      exposure_window = suffix,
+      mean_abs_smd = mean_abs_smd,
+      ncov_smd_greater_than_0.1 = ncov_smd_greater_than_0.1
+    )
+  )
+  
+}
+
+
+balance_summary_df
+```
+
+
+
+# Final reradomization
+
+```{r}
+#' Create a single stratified train/test split
+#' 
+#' This function creates a train/test split using either manual stratified sampling
+#' or tidymodels approach. The manual method stratifies by region_grouped and gad_category,
+#' randomly ordering observations within each stratum and allocating 50% to training.
+#' 
+#' @param data The full dataset to split
+#' @param seed_value Seed for reproducible randomization
+#' @param method Either "manual" for custom stratified sampling or "tidymodels" for rsample approach
+#' @return List containing train_data, test_data, and seed value
+create_stratified_split = function(data, seed_value, method = "manual") {
+  set.seed(seed_value)
+  
+  if(method == "manual") {
+    # Manual stratified sampling: stratify by region and GAD category
+    stratified_data = data %>%
+      group_by(region_grouped, gad_category) %>%
+      mutate(random_order = runif(n())) %>%  # Random ordering within strata
+      arrange(random_order) %>%
+      mutate(
+        stratum_size = n(),
+        train_size = floor(stratum_size * 0.50),  # 50% to training, rounded down
+        train_flag = row_number() <= train_size
+      ) %>%
+      ungroup()
+    
+    train_data = stratified_data %>% filter(train_flag == TRUE)
+    test_data = stratified_data %>% filter(train_flag == FALSE)
+    
+  } else if(method == "tidymodels") {
+    # Using tidymodels initial_split with stratification
+    data_split = initial_split(data, prop = 0.50, strata = "strata_var", pool = 0.05)
+    train_data = training(data_split)
+    test_data = testing(data_split)
+  }
+  
+  return(list(train = train_data, test = test_data, seed = seed_value))
+}
+```
+
+
+```{r}
+#' Calculate balance score using logistic regression AUC
+#' 
+#' This function measures how well covariates can predict whether an observation
+#' is in the training or test set. Lower AUC (closer to 0.5) indicates better
+#' balance, as covariates cannot distinguish between train/test groups.
+#' This is the key metric for rerandomization selection.
+#' 
+#' @param train_data Training dataset
+#' @param test_data Test dataset  
+#' @param covariates Vector of covariate names to include in balance model
+#' @return List with AUC value and diagnostic information
+calculate_balance_auc = function(train_data, test_data, covariates) {
+  # Combine datasets with group indicator (0=train, 1=test)
+  combined_data = bind_rows(
+    train_data %>% select(all_of(covariates)) %>% mutate(group = 0),
+    test_data %>% select(all_of(covariates)) %>% mutate(group = 1)
+  )
+  
+  # Remove rows with any missing values in covariates
+  complete_data = combined_data %>% 
+    select(all_of(c(covariates, "group"))) %>%
+    na.omit()
+  
+  if(nrow(complete_data) < 50) {
+    warning("Insufficient complete observations for AUC calculation")
+    return(list(auc = NA, n_complete = nrow(complete_data)))
+  }
+  
+  # Convert categorical variables to factors for modeling
+  for(covar in covariates) {
+    if(covar %in% names(complete_data)) {
+      if(is.character(complete_data[[covar]]) || is.factor(complete_data[[covar]])) {
+        complete_data[[covar]] = factor(complete_data[[covar]])
+      }
+    }
+  }
+  
+  # Build formula - include all available covariates
+  # No restriction on categorical levels since our max is 9 levels
+  formula_parts = character(0)
+  for(covar in covariates) {
+    if(covar %in% names(complete_data)) {
+      formula_parts = c(formula_parts, covar)
+    }
+  }
+  
+  if(length(formula_parts) == 0) {
+    warning("No suitable covariates for balance regression")
+    return(list(auc = NA, n_complete = nrow(complete_data)))
+  }
+  
+  # Create logistic regression formula: group ~ all_covariates
+  formula_str = paste("group ~", paste(formula_parts, collapse = " + "))
+  
+  # Fit logistic regression predicting train/test assignment from covariates
+  tryCatch({
+    balance_model = glm(as.formula(formula_str), 
+                        data = complete_data, 
+                        family = binomial())
+    
+    # Get predicted probabilities of being in test set
+    predictions = predict(balance_model, type = "response")
+    
+    # Calculate AUC: How well can covariates predict train/test assignment?
+    # AUC near 0.5 = poor prediction = good balance
+    # AUC near 1.0 = excellent prediction = poor balance
+    auc_result = pROC::auc(complete_data$group, predictions, quiet = TRUE)
+    
+    return(list(
+      auc = as.numeric(auc_result), 
+      n_complete = nrow(complete_data),
+      n_predictors = length(formula_parts),
+      model_converged = balance_model$converged
+    ))
+    
+  }, error = function(e) {
+    warning(paste("Error in balance regression:", e$message))
+    return(list(auc = NA, n_complete = nrow(complete_data)))
+  })
+}
+```
+
+
+```{r}
+#' Perform rerandomization to find optimal train/test split
+#' 
+#' This function generates multiple candidate train/test splits and selects
+#' the one with the best covariate balance (lowest AUC). This addresses
+#' the concern that random chance imbalance could drive differences in
+#' policy effect estimates between training and test sets.
+#' 
+#' HOW AUC MEASURES BALANCE:
+#' 1. Combine train/test data with group indicator (0=train, 1=test)
+#' 2. Run logistic regression: group ~ all_covariates
+#' 3. AUC measures how well covariates predict group membership
+#' 4. AUC ≈ 0.5 = covariates can't predict groups = GOOD balance
+#' 5. AUC ≈ 1.0 = covariates perfectly predict groups = BAD balance
+#' 6. Select split with LOWEST AUC = best balance
+#' 
+#' @param data Full dataset to split
+#' @param n_randomizations Number of candidate splits to generate (10-50 would be recommended, setting default of 10)
+#' @param method Splitting method ("manual" or "tidymodels")
+#' @return List containing best split, all results, and diagnostics
+perform_rerandomization = function(data, n_randomizations = 10, method = "manual") {
+  cat("Performing rerandomization with", n_randomizations, "random splits...\n")
+  cat("Goal: Find split where covariates CANNOT predict train vs test assignment\n")
+  
+  # Initialize tracking variables (much smaller memory footprint than storing all splits)
+  best_auc = Inf                           # Track best AUC score found so far
+  best_seed = NULL                         # Track seed that produced best AUC
+  all_aucs = numeric(n_randomizations)     # Store only AUC values (not full datasets)
+  all_seeds = numeric(n_randomizations)    # Store corresponding seeds for analysis
+  
+  # Progress tracking with error handling
+  pb = txtProgressBar(min = 0, max = n_randomizations, style = 3)
+  
+  # MAIN LOOP: Generate and evaluate each candidate split
+  for(i in 1:n_randomizations) {
+    
+    # Update progress bar
+    setTxtProgressBar(pb, i)
+    
+    # Generate random seed for this iteration
+    set.seed(42) ## Note: Set seed for the sample to reproduce results
+    seed_i = sample(1:100000, 1)
+    all_seeds[i] = seed_i  # Store seed for potential analysis
+    
+    tryCatch({
+      # STEP 1: Create stratified split using specified method
+      # This maintains stratification by region_grouped and gad_category
+      # but randomizes assignment within each stratum
+      split_result = create_stratified_split(data, seed_i, method)
+      
+      # STEP 2: Measure balance quality using AUC approach
+      # This tests how well covariates can distinguish train from test observations
+      auc_result = calculate_balance_auc(
+        split_result$train,    # Training observations
+        split_result$test,     # Test observations  
+        full_covariates    # Covariates to test for balance
+      )
+      
+      # STEP 3: Store only the AUC score (tiny memory footprint vs full datasets)
+      all_aucs[i] = auc_result$auc
+      
+      # STEP 4: Update best split tracker if this one is better (lower AUC)
+      if(!is.na(auc_result$auc) && auc_result$auc < best_auc) {
+        best_auc = auc_result$auc
+        best_seed = seed_i
+      }
+      
+      # STEP 5: Immediately removing stored large objects (to avoid crashing)
+      rm(split_result, auc_result)
+      gc()  # Force garbage collection to free memory immediately
+      
+    }, error = function(e) {
+      # Pasting a warning message if an error occurred in the randomization
+      warning(paste("Error in randomization", i, ":", e$message))
+      all_aucs[i] = NA
+    })
+    
+    # Memory management for large datasets
+    if(i %% 5 == 0) {
+      gc()  # Additional cleanup every 5 iterations
+    }
+  }
+  
+  close(pb)
+  cat("\n")  # New line after progress bar
+  
+  # Report results and improvement achieved
+  cat("=== Rerandomization results ===\n")
+  cat("Number of valid randomizations:", sum(!is.na(all_aucs)), "\n")
+  
+  # Show AUC range 
+  auc_range = range(all_aucs, na.rm = TRUE)
+  cat("AUC range:", round(auc_range[1], 4), "to", round(auc_range[2], 4), "\n")
+  auc_improvement = round((auc_range[2] - auc_range[1]) / auc_range[2] * 100, 1)
+  cat("AUC improvement from rerandomization:", auc_improvement, "%\n")
+  
+  cat("Best AUC (lower = better balance):", round(best_auc, 4), "\n")
+  cat("Best seed:", best_seed, "\n\n")
+  
+  # FINAL STEP: Recreate only the best split for subsequent analysis
+  # This saves memory compared to keeping all splits in memory throughout
+  cat("Recreating optimal split...\n")
+  final_split = create_stratified_split(data, best_seed, method)
+  
+  # Return comprehensive results
+  return(list(
+    best_split = final_split,              # The selected train/test split
+    best_auc = best_auc,                   # AUC of the selected split
+    best_seed = best_seed,                 # Seed that produced the best split
+    all_aucs = all_aucs,                   # AUC scores for all splits tested
+    all_seeds = all_seeds,                 # Seeds for all splits tested  
+    auc_improvement = auc_improvement      # Percentage improvement from rerandomization
+  ))
+}
+```
+
+
+
+```{r}
+# Function test
+if(FALSE){
+  
+  ## init
+  data = cope_auo_full
+  n_randomizations = 20
+  method = "manual"
+  
+  cat("Performing rerandomization with", n_randomizations, "random splits...\n")
+  cat("Goal: Find split where covariates CANNOT predict train vs test assignment\n")
+  
+  # Initialize tracking variables (much smaller memory footprint than storing all splits)
+  best_auc = Inf                           # Track best AUC score found so far
+  best_seed = NULL                         # Track seed that produced best AUC
+  all_aucs = numeric(n_randomizations)     # Store only AUC values (not full datasets)
+  all_seeds = numeric(n_randomizations)    # Store corresponding seeds for analysis
+  
+  # Progress tracking with error handling
+  pb = txtProgressBar(min = 0, max = n_randomizations, style = 3)
+  
+  # MAIN LOOP: Generate and evaluate each candidate split
+  for(i in 1:n_randomizations) {
+    
+    # Update progress bar
+    setTxtProgressBar(pb, i)
+    
+    # Generate random seed for this iteration
+    set.seed(42) ## Note: Set seed for the sample to reproduce results
+    seed_i = sample(1:100000, 1)
+    all_seeds[i] = seed_i  # Store seed for potential analysis
+    
+    tryCatch({
+      # STEP 1: Create stratified split using specified method
+      # This maintains stratification by region_grouped and gad_category
+      # but randomizes assignment within each stratum
+      split_result = create_stratified_split(data, seed_i, method)
+      
+      # STEP 2: BALANCE AUC
+      ## init
+      train_data = split_result$train    # Training observations
+      test_data =  split_result$test     # Test observations  
+      covariates = full_covariates    # Covariates to test for balance
+      
+      # Combine datasets with group indicator (0=train, 1=test)
+      combined_data = bind_rows(
+        train_data %>% select(all_of(covariates)) %>% mutate(group = 0),
+        test_data %>% select(all_of(covariates)) %>% mutate(group = 1)
+      )
+      
+      # Remove rows with any missing values in covariates
+      complete_data = combined_data %>% 
+        select(all_of(c(covariates, "group"))) %>%
+        na.omit()
+      
+      if(nrow(complete_data) < 50) {
+        warning("Insufficient complete observations for AUC calculation")
+        return(list(auc = NA, n_complete = nrow(complete_data)))
+      }
+      
+      # Convert categorical variables to factors for modeling
+      for(covar in covariates) {
+        if(covar %in% names(complete_data)) {
+          if(is.character(complete_data[[covar]]) || is.factor(complete_data[[covar]])) {
+            complete_data[[covar]] = factor(complete_data[[covar]])
+          }
+        }
+      }
+      
+      # Build formula - include all available covariates
+      # No restriction on categorical levels since our max is 9 levels
+      formula_parts = character(0)
+      for(covar in covariates) {
+        if(covar %in% names(complete_data)) {
+          formula_parts = c(formula_parts, covar)
+        }
+      }
+      
+      if(length(formula_parts) == 0) {
+        warning("No suitable covariates for balance regression")
+        return(list(auc = NA, n_complete = nrow(complete_data)))
+      }
+      
+      # Create logistic regression formula: group ~ all_covariates
+      formula_str = paste("group ~", paste(formula_parts, collapse = " + "))
+      
+      # Fit
+      balance_model = glm(as.formula(formula_str), 
+                        data = complete_data, 
+                        family = binomial())
+    
+      # Get predicted probabilities of being in test set
+      predictions = predict(balance_model, type = "response")
+      
+      # Calculate AUC: How well can covariates predict train/test assignment?
+      # AUC near 0.5 = poor prediction = good balance
+      # AUC near 1.0 = excellent prediction = poor balance
+      auc_result = pROC::auc(complete_data$group, predictions, quiet = TRUE)
+      
+      
+    }, error = function(e) {
+      # Pasting a warning message if an error occurred in the randomization
+      warning(paste("Error in randomization", i, ":", e$message))
+      all_aucs[i] = NA
+    })
+    
+    # Memory management for large datasets
+    if(i %% 5 == 0) {
+      gc()  # Additional cleanup every 5 iterations
+    }
+  }
+    
+  
+}
+```
+
+
+
+### Calculate for each exposure window
+
+```{r}
+#' Perform rerandomization across windows to find optimal train/test split
+#' 
+#' This function generates multiple candidate train/test splits and selects
+#' the one with the best covariate balance (lowest AUC). This addresses
+#' the concern that random chance imbalance could drive differences in
+#' policy effect estimates between training and test sets.
+#' 
+#' HOW AUC MEASURES BALANCE:
+#' 1. Combine train/test data with group indicator (0=train, 1=test)
+#' 2. Run logistic regression: group ~ all_covariates
+#' 3. AUC measures how well covariates predict group membership
+#' 4. AUC ≈ 0.5 = covariates can't predict groups = GOOD balance
+#' 5. AUC ≈ 1.0 = covariates perfectly predict groups = BAD balance
+#' 6. Select split with LOWEST AUC = best balance
+#' 
+#' @param data Full dataset to split
+#' @param n_randomizations Number of candidate splits to generate (10-50 would be recommended, setting default of 10)
+#' @param method Splitting method ("manual" or "tidymodels")
+#' @return List containing best split, all results, and diagnostics
+perform_rerandomization_w_windows = function(data, n_randomizations = 10, method = "manual") {
+  cat("Performing rerandomization with", n_randomizations, "random splits...\n")
+  cat("Goal: Find split where covariates CANNOT predict train vs test assignment\n")
+  
+  # Initialize tracking variables (much smaller memory footprint than storing all splits)
+  best_auc = Inf                           # Track best AUC score found so far
+  best_seed = NULL                         # Track seed that produced best AUC
+  all_aucs = numeric(n_randomizations)     # Store only AUC values (not full datasets)
+  all_seeds = numeric(n_randomizations)    # Store corresponding seeds for analysis
+  
+  # Extract all time windows
+
+  ## Get existing covariates with exposure variables
+  exposure_covariates <- grep("^C[1-7]", names(data), value = TRUE)
+  
+  ## Extract all suffixes
+  time_suffixes <- unique(str_extract(exposure_covariates, "(?<=C[1-7]M_)\\d{8}_\\d+d"))
+  
+  ## Remove NA if any
+  time_suffixes <- time_suffixes[!is.na(time_suffixes)]
+  
+  # Progress bar
+  ## Progress tracking with error handling
+  pb = txtProgressBar(min = 0, max = n_randomizations, style = 3)
+  
+  # MAIN LOOP: Generate and evaluate each candidate split
+  for(i in 1:n_randomizations) {
+    
+    ## Update progress bar
+    setTxtProgressBar(pb, i)
+    
+    ## Processing loop
+    print(paste0("Processing loop: ", i))
+    
+    ## Generate random seed for this iteration
+    set.seed(42) ## Note: Set seed for the sample to reproduce results
+    seed_i = sample(1:100000, 1)
+    all_seeds[i] = seed_i  # Store seed for potential analysis
+    
+    exposure_aucs <- c()
+    
+    ## Loop through time suffixes
+    for (suffix in time_suffixes) {
+      ## Print window
+      print(paste("Now processing:", suffix))
+      
+      ## Get exposure covariates per window
+      exposure_coviarates_window <- paste0("C", 1:7, "M_", suffix)
+      
+      ## Safety check: skip if any variable not present
+      if (!all(exposure_coviarates_window %in% exposure_covariates)){
+        print(paste0("Not present: ", suffix))
+      }
+      
+      ## Extract subset
+      full_covariates <- c(balance_covariates, exposure_coviarates_window)
+      
+      tryCatch({
+        # STEP 1: Create stratified split using specified method
+        # This maintains stratification by region_grouped and gad_category
+        # but randomizes assignment within each stratum
+        split_result = create_stratified_split(data, seed_i, method)
+        
+        # STEP 2: Measure balance quality using AUC approach
+        # This tests how well covariates can distinguish train from test observations
+        auc_result = calculate_balance_auc(
+          split_result$train,    # Training observations
+          split_result$test,     # Test observations  
+          full_covariates    # Covariates to test for balance
+        )
+        
+        
+        # STEP 3: Store only the AUC score (tiny memory footprint vs full datasets)
+        exposure_aucs <- c(exposure_aucs, auc_result$auc)
+  
+        
+        # STEP 4: Immediately removing stored large objects (to avoid crashing)
+        rm(split_result, auc_result)
+        gc()  # Force garbage collection to free memory immediately
+        
+      }, error = function(e) {
+        # Pasting a warning message if an error occurred in the randomization
+        warning(paste("Error in randomization", suffix, ":", e$message))
+        exposure_aucs <- c(exposure_aucs, NA)
+      })
+      
+    }
+    
+    ## Get average auc
+    if (all(!is.na(exposure_aucs))) {
+      all_aucs[i] <- mean(exposure_aucs)
+    } else {
+      cat("NA present in AUCs for:", seed_i, "\n")
+      all_aucs[i] <- NA
+    }
+    
+    # STEP 4: Update best split tracker if this one is better (lower AUC)
+    if(all_aucs[i] < best_auc) {
+      best_auc = all_aucs[i]
+      best_seed = seed_i
+    }
+    
+    # Memory management for large datasets
+    if(i %% 5 == 0) {
+      gc()  # Additional cleanup every 5 iterations
+    }
+  }
+  
+  close(pb)
+  cat("\n")  # New line after progress bar
+  
+  # Report results and improvement achieved
+  cat("=== Rerandomization results ===\n")
+  cat("Number of valid randomizations:", sum(!is.na(all_aucs)), "\n")
+  
+  # Show AUC range 
+  auc_range = range(all_aucs, na.rm = TRUE)
+  cat("AUC range:", round(auc_range[1], 4), "to", round(auc_range[2], 4), "\n")
+  auc_improvement = round((auc_range[2] - auc_range[1]) / auc_range[2] * 100, 1)
+  cat("AUC improvement from rerandomization:", auc_improvement, "%\n")
+  
+  cat("Best AUC (lower = better balance):", round(best_auc, 4), "\n")
+  cat("Best seed:", best_seed, "\n\n")
+  
+  # FINAL STEP: Recreate only the best split for subsequent analysis
+  # This saves memory compared to keeping all splits in memory throughout
+  cat("Recreating optimal split...\n")
+  final_split = create_stratified_split(data, best_seed, method)
+  
+  # Return comprehensive results
+  return(list(
+    best_split = final_split,              # The selected train/test split
+    best_auc = best_auc,                   # AUC of the selected split
+    best_seed = best_seed,                 # Seed that produced the best split
+    all_aucs = all_aucs,                   # AUC scores for all splits tested
+    all_seeds = all_seeds,                 # Seeds for all splits tested  
+    auc_improvement = auc_improvement      # Percentage improvement from rerandomization
+  ))
+}
+```
+
+
+```{r}
+# PERFORM RERANDOMIZATION (this will overwrite train_data and test_data with optimal split)
+rerand_results = perform_rerandomization_w_windows(cope_auo_full, n_randomizations = 20, method = "manual")
+
+# Extract optimal split (this overwrites the original train_data and test_data)
+train_data = rerand_results$best_split$train
+test_data = rerand_results$best_split$test
+```
+
+# Map exposure names
+
+```{r}
+# Apply mapping for modeling
+## train
+train_data_modeling <- train_data %>%
+  rename_with(~ {
+    idx = match(., column_map$old_name)
+    ifelse(is.na(idx), ., column_map$new_name[idx])
+  })
+
+## test
+test_data_modeling = test_data %>%
+  rename_with(~ {
+    idx = match(., column_map$old_name)
+    ifelse(is.na(idx), ., column_map$new_name[idx])
+  })
+
+```
+
+
+
+# Export
+```{r}
+# Saving re-randomized train/test splits
+write_parquet(train_data_modeling, "train_data_rerandomized.parquet")
+write_parquet(test_data_modeling, "test_data_rerandomized.parquet")  
+
+# Get the bucket name (same as your loading code)
+my_bucket = Sys.getenv('WORKSPACE_BUCKET')
+
+# Copy the files from local directory to the bucket's data folder
+system(paste0("gsutil cp train_data_rerandomized.parquet ", my_bucket, "/data/"), intern=T)
+system(paste0("gsutil cp test_data_rerandomized.parquet ", my_bucket, "/data/"), intern=T)
+```
+
+
+# Balance analysis
+
+```{r}
+balance_analysis = calculate_balance(train_data, test_data, full_covariates)
+balance_results = balance_analysis$balance_results
+categorical_results = balance_analysis$categorical_results
+
+cat("=== Final balance summary (post-rerandomization) ===\n")
+cat("Mean absolute standardized mean difference:", 
+    round(mean(abs(balance_results$smd), na.rm = TRUE), 3), "\n")
+cat("Number of covariates with |SMD| > 0.1:", 
+    sum(abs(balance_results$smd) > 0.1, na.rm = TRUE), "\n\n")
+
+# Create master alphabetical ordering of ALL variables
+all_vars_alphabetical = sort(c(
+  balance_results_pre_rerand$variable,
+  balance_results$variable,
+  names(categorical_results_pre_rerand),
+  names(categorical_results)
+)) %>% unique()
+
+#' Create separate balance plots for continuous/binary vs categorical variables
+#' 
+#' @param balance_results Balance results from calculate_balance()
+#' @param categorical_results Categorical balance results from calculate_balance()
+#' @param pre_randomization Logical. If TRUE, changes title to indicate pre-rerandomization results
+#' @return List containing two ggplot objects: continuous_plot and categorical_plot
+create_balance_plots = function(balance_results, categorical_results, pre_randomization = FALSE) {
+  
+  # Set title prefix based on pre_randomization parameter
+  title_prefix = if(pre_randomization) {
+    "Before Rerandomization:"
+  } else {
+    "After Rerandomization:"
+  }
+  
+  # PLOT 1: CONTINUOUS AND BINARY VARIABLES (using SMD)
+  continuous_results = balance_results %>% 
+    filter(type %in% c("continuous", "binary")) %>%
+    select(variable, smd) %>%
+    mutate(
+      variable_type = case_when(
+        variable %in% c("sex", "birthplace") ~ "Binary",
+        TRUE ~ "Continuous"
+      ),
+      abs_smd = abs(smd),
+      balance_quality = case_when(
+        abs_smd <= 0.05 ~ "Excellent (≤0.05)",
+        abs_smd <= 0.1 ~ "Good (0.05-0.1)",
+        abs_smd <= 0.2 ~ "Moderate (0.1-0.2)", 
+        TRUE ~ "Poor (>0.2)"
+      ),
+      balance_quality = factor(balance_quality, 
+                               levels = c("Excellent (≤0.05)", "Good (0.05-0.1)", 
+                                          "Moderate (0.1-0.2)", "Poor (>0.2)"))
+    )
+  
+  continuous_plot = ggplot(continuous_results, aes(x = factor(variable, levels = rev(all_vars_alphabetical)), y = smd)) +
+    geom_hline(yintercept = c(-0.2, -0.1, -0.05, 0, 0.05, 0.1, 0.2), 
+               color = c("red", "orange", "darkgreen", "black", "darkgreen", "orange", "red"),
+               linetype = c("dashed", "dashed", "dashed", "solid", "dashed", "dashed", "dashed"),
+               alpha = 0.7) +
+    geom_point(aes(color = balance_quality, shape = variable_type), size = 3, alpha = 0.8) +
+    scale_color_manual(values = c("Excellent (≤0.05)" = "#006400", 
+                                  "Good (0.05-0.1)" = "#2E8B57", 
+                                  "Moderate (0.1-0.2)" = "#FF8C00", 
+                                  "Poor (>0.2)" = "#DC143C")) +
+    scale_shape_manual(values = c("Continuous" = 16, "Binary" = 17)) +
+    coord_flip() +
+    labs(
+      title = paste(title_prefix, "Continuous/Binary Variables"),
+      subtitle = "Standardized Mean Differences (SMD) Between Training and Test Sets",
+      x = "Variables",
+      y = "Standardized Mean Difference",
+      color = "Balance Quality",
+      shape = "Variable Type",
+      caption = "SMD closer to zero = better balance\nThresholds: |SMD| ≤ 0.05 (excellent), ≤ 0.1 (good), ≤ 0.2 (moderate)"
+    ) +
+    theme_minimal() +
+    theme(
+      plot.title = element_text(size = 14, face = "bold"),
+      plot.subtitle = element_text(size = 12),
+      axis.text.y = element_text(size = 10),
+      legend.position = "bottom"
+    )
+  
+  # PLOT 2: CATEGORICAL VARIABLES (using Cramer's V)
+  categorical_df = map_dfr(categorical_results, function(cat_result) {
+    tibble(
+      variable = cat_result$variable,
+      cramers_v = cat_result$cramers_v,
+      n_levels = cat_result$n_levels,
+      chi_p_value = cat_result$chi_p_value
+    )
+  }) %>%
+    mutate(
+      balance_quality = case_when(
+        cramers_v <= 0.05 ~ "Excellent (≤0.05)",
+        cramers_v <= 0.1 ~ "Good (0.05-0.1)",
+        cramers_v <= 0.2 ~ "Moderate (0.1-0.2)", 
+        TRUE ~ "Poor (>0.2)"
+      ),
+      balance_quality = factor(balance_quality, 
+                               levels = c("Excellent (≤0.05)", "Good (0.05-0.1)", 
+                                          "Moderate (0.1-0.2)", "Poor (>0.2)"))
+    )
+  
+  categorical_plot = ggplot(categorical_df, aes(x = factor(variable, levels = rev(all_vars_alphabetical)), y = cramers_v)) +
+    geom_hline(yintercept = c(0, 0.05, 0.1, 0.2), 
+               color = c("black", "darkgreen", "orange", "red"),
+               linetype = c("solid", "dashed", "dashed", "dashed"),
+               alpha = 0.7) +
+    geom_point(aes(color = balance_quality, size = n_levels), alpha = 0.8) +
+    scale_color_manual(values = c("Excellent (≤0.05)" = "#006400", 
+                                  "Good (0.05-0.1)" = "#2E8B57", 
+                                  "Moderate (0.1-0.2)" = "#FF8C00", 
+                                  "Poor (>0.2)" = "#DC143C")) +
+    scale_size_continuous(range = c(2, 4), name = "# Categories") +
+    coord_flip() +
+    ylim(0, max(categorical_df$cramers_v) * 1.1) +
+    labs(
+      title = paste(title_prefix, "Categorical Variables"),
+      subtitle = "Cramer's V Association Strength Between Training and Test Sets",
+      x = "Variables",
+      y = "Cramer's V (Association Strength)",
+      color = "Balance Quality",
+      size = "# Categories",
+      caption = "Cramer's V closer to zero = better balance\nMeasures how differently categories are distributed between train/test groups"
+    ) +
+    theme_minimal() +
+    theme(
+      plot.title = element_text(size = 14, face = "bold"),
+      plot.subtitle = element_text(size = 12),
+      axis.text.y = element_text(size = 10),
+      legend.position = "bottom"
+    )
+  
+  return(list(continuous_plot = continuous_plot, categorical_plot = categorical_plot))
+}
+
+# Count variables by balance quality
+excellent_balance = sum(balance_results$abs_smd <= 0.05, na.rm = TRUE)
+good_balance = sum(balance_results$abs_smd > 0.05 & balance_results$abs_smd <= 0.1, na.rm = TRUE)
+poor_balance = sum(balance_results$abs_smd > 0.1, na.rm = TRUE)
+
+total_numeric_vars = excellent_balance + good_balance + poor_balance
+
+cat("- Continuous/Binary variables with excellent balance (|SMD| ≤ 0.05):", excellent_balance, "/", total_numeric_vars, "\n")
+cat("- Continuous/Binary variables with good balance (0.05 < |SMD| ≤ 0.1):", good_balance, "/", total_numeric_vars, "\n") 
+cat("- Continuous/Binary variables with poor balance (|SMD| > 0.1):", poor_balance, "/", total_numeric_vars, "\n")
+
+if(length(categorical_results) > 0) {
+  cat("- Categorical variables analyzed:", length(categorical_results), "\n")
+}
+
+
+# Calculate balance for pre-randomized data
+cat("=== Calculating balance for pre-rerandomization split ===\n")
+balance_analysis_pre_rerand = calculate_balance(train_data_pre_rerand, test_data_pre_rerand, full_covariates)
+balance_results_pre_rerand = balance_analysis_pre_rerand$balance_results
+categorical_results_pre_rerand = balance_analysis_pre_rerand$categorical_results
+
+# Create and save balance plots (pre and post re-randomization balance)
+# Plot for pre-rerandomization balance
+plots_pre_rerand = create_balance_plots(balance_results_pre_rerand, categorical_results_pre_rerand, 
+                                        pre_randomization = TRUE)
+
+plots_post_rerand = create_balance_plots(balance_results, categorical_results, 
+                                         pre_randomization = FALSE)
+
+# Save plots with descriptive names (avoiding unicode issues)
+ggsave(paste0(dir_viz, "continuous_balance_before_rerandomization_updated.pdf"), plots_pre_rerand$continuous_plot, 
+       width = 12, height = 8, device = "pdf")
+ggsave(paste0(dir_viz,"continuous_balance_after_rerandomization_updated.pdf"), plots_post_rerand$continuous_plot, 
+       width = 12, height = 8, device = "pdf")
+ggsave(paste0(dir_viz,"categorical_balance_before_rerandomization_updated.pdf"), plots_pre_rerand$categorical_plot, 
+       width = 12, height = 8, device = "pdf")
+ggsave(paste0(dir_viz,"categorical_balance_after_rerandomization_updated.pdf"), plots_post_rerand$categorical_plot, 
+       width = 12, height = 8, device = "pdf")
+
+```
+
+# Comparing rerandomization with manual train/test split and tidymodels approach
+
+```{r}
+# Compare our rerandomization result with standard tidymodels approach
+set.seed(rerand_results$best_split$seed)  # Use same seed as best rerandomization for fair comparison
+data_split_tidymodels = initial_split(cope_auo_full, prop = 0.50, strata = "strata_var", pool = 0.05)
+train_data_tidymodels = training(data_split_tidymodels)
+test_data_tidymodels = testing(data_split_tidymodels)
+
+# Calculate AUC for both methods to compare balance quality
+rerandomization_auc = calculate_balance_auc(train_data, test_data, full_covariates)
+tidymodels_auc = calculate_balance_auc(train_data_tidymodels, test_data_tidymodels, full_covariates)
+
+cat("\n=== METHOD COMPARISON ===\n")
+cat("Rerandomization Method - Training:", nrow(train_data), "Testing:", nrow(test_data), "AUC:", round(rerandomization_auc$auc, 4), "\n")
+cat("Tidymodels Method - Training:", nrow(train_data_tidymodels), "Testing:", nrow(test_data_tidymodels), "AUC:", round(tidymodels_auc$auc, 4), "\n")
+
+if(rerandomization_auc$auc < tidymodels_auc$auc) {
+  cat("✓ Rerandomization achieved better balance (lower AUC = better balance)\n")
+  improvement_pct = round((tidymodels_auc$auc - rerandomization_auc$auc) / tidymodels_auc$auc * 100, 1)
+  cat("  Balance improvement:", improvement_pct, "%\n")
+} else {
+  cat("! Tidymodels achieved better balance\n")
+}
+
+```
+
+# Policy impact regression
+
+```{r}
+# Policy Impact Regression Function with Covariates
+policy_impact_regression = function(dataset, dataset_name = "Dataset", cluster_var = "RegionName", robust = TRUE) {
+  
+  # Load required packages
+  require(sandwich)
+  require(lmtest)
+  
+  # Print analysis info
+  cat(paste("Running analysis for:", dataset_name, "\n"))
+  cat(paste("Sample size:", nrow(dataset), "\n\n"))
+  
+  # Define covariates (excluding outcome and policy variables)
+  covariates = c(
+    "age_2020", "home", "maritalstatus", "race", "education", "employment", 
+    "insurance", "anxiety_disorder_before_covid_lifetime", "anxiety_disorder_1yr_before_covid", 
+    "sex", "birthplace", "generalized_anxiety_disorder_before_covid_lifetime",
+    "generalized_anxiety_disorder_1yr_before_covid"
+  )
+  
+  # Check if all covariates exist
+  missing_covariates = setdiff(covariates, names(dataset))
+  if(length(missing_covariates) > 0) {
+    warning(paste("The following covariates are missing:", paste(missing_covariates, collapse = ", ")))
+    covariates = intersect(covariates, names(dataset))
+  }
+  
+  # Check if clustering variable exists
+  if(robust && !is.null(cluster_var) && !(cluster_var %in% names(dataset))) {
+    warning(paste("Clustering variable", cluster_var, "not found. Using robust standard errors without clustering."))
+    cluster_var = NULL
+  }
+  
+  # Get all policy columns using regex pattern matching
+  policy_cols = names(dataset)[grepl("^C[1-7]M_\\d{8}_\\d+d$", names(dataset))]
+  
+  if(length(policy_cols) == 0) {
+    # Print first few column names for debugging
+    print("No policy columns found. Sample column names:")
+    print(head(names(cope_auo_full), 20))
+    stop("No policy columns found. Check column name format.")
+  }
+  
+  # Initialize results storage
+  results = tibble()
+  heatmap_data = tibble()
+  
+  # Create progress bar for monitoring
+  pb = txtProgressBar(min = 0, max = length(policy_cols), style = 3)
+  
+  # Analyze each policy window column
+  for (i in seq_along(policy_cols)) {
+    setTxtProgressBar(pb, i)
+    policy_col = policy_cols[i]
+    
+    # Extract window metadata from column name
+    meta = str_match(policy_col, "^C[1-7]M_(\\d{8})_(\\d+)d$")
+    
+    # Add error checking
+    if(is.na(meta[1,1])) {
+      warning(paste("Could not extract metadata from column name:", policy_col))
+      next
+    }
+    
+    start_date = as.Date(meta[1,2], "%Y%m%d")
+    duration = as.numeric(meta[1,3])
+    policy = str_extract(policy_col, "^C[1-7]M")
+    
+    # Construct regression formula
+    formula = reformulate(
+      termlabels = c(policy_col, covariates),
+      response = "gad_score_july"
+    )
+    
+    # Run weighted regression
+    model = lm(
+      formula,
+      data = dataset,
+      weights = observation_wt_trim
+    )
+    
+    # Variables to store regression statistics
+    policy_estimate = NA
+    policy_t_stat = NA
+    policy_p_value = NA
+    
+    # Compute robust or clustered standard errors
+    if (robust) {
+      if (!is.null(cluster_var)) {
+        # Clustered standard errors
+        vcov_matrix = vcovCL(model, cluster = dataset[[cluster_var]])
+      } else {
+        # Heteroskedasticity-robust standard errors (HC3)
+        vcov_matrix = vcovHC(model, type = "HC3")
+      }
+      
+      # Get the robust coefficient table
+      coef_table = coeftest(model, vcov = vcov_matrix)
+      
+      # Extract policy statistics using the robust standard errors
+      policy_index = which(rownames(coef_table) == policy_col)
+      
+      if (length(policy_index) > 0) {
+        policy_estimate = coef_table[policy_index, 1]
+        policy_std_error = coef_table[policy_index, 2]
+        policy_t_stat = coef_table[policy_index, 3]
+        policy_p_value = coef_table[policy_index, 4]
+      } else {
+        warning(paste("Could not find policy column in model results:", policy_col))
+        next
+      }
+    } else {
+      # Use regular standard errors from the model
+      tidy_model = broom::tidy(model)
+      policy_stats = tidy_model %>% 
+        filter(term == policy_col)
+      
+      if (nrow(policy_stats) == 0) {
+        warning(paste("Could not find policy column in model results:", policy_col))
+        next
+      }
+      
+      policy_estimate = policy_stats$estimate
+      policy_t_stat = policy_stats$statistic
+      policy_p_value = policy_stats$p.value
+    }
+    
+    # Store results
+    results = bind_rows(results, tibble(
+      start_date = start_date,
+      duration = duration,
+      policy = policy,
+      estimate = policy_estimate,
+      t_stat = abs(policy_t_stat),
+      p_value = policy_p_value,
+      dataset = dataset_name  
+    ))
+  }
+  
+  close(pb)  # Close progress bar
+  
+  # Generate FDR-corrected p-values
+  results = results %>%
+    group_by(policy) %>%
+    mutate(fdr_p_value = p.adjust(p_value, method = "fdr")) %>%
+    ungroup()
+  
+  # Create heatmap data (mean absolute t-statistics)
+  heatmap_data = results %>%
+    group_by(start_date, duration) %>%
+    summarize(mean_abs_t_stat = mean(t_stat, na.rm = TRUE), .groups = "drop") %>%
+    mutate(dataset = dataset_name)  
+  
+  # Identify significant results
+  significant_uncorrected = results %>%
+    filter(p_value <= 0.05) %>%
+    group_by(start_date, duration, policy) %>%
+    summarize(n_significant = n(), .groups = "drop")
+  
+  significant_fdr = results %>%
+    filter(fdr_p_value <= 0.05) %>%
+    group_by(start_date, duration, policy) %>%
+    summarize(n_significant = n(), .groups = "drop")
+  
+  list(
+    full_results = results,
+    heatmap_data = heatmap_data,
+    significant_uncorrected = significant_uncorrected,
+    significant_fdr = significant_fdr,
+    robust = robust,
+    cluster_var = cluster_var,
+    dataset_name = dataset_name  
+  )
+}
+
+
+# RUN ANALYSES FOR ALL DATASETS
+
+# Full sample analysis
+results_full = policy_impact_regression(cope_auo_full, "Full Sample", 
+                                        cluster_var = "RegionName", robust = TRUE)
+
+# Training set analysis  
+results_train = policy_impact_regression(train_data, "Training Set", 
+                                         cluster_var = "RegionName", robust = TRUE)
+
+# Testing set analysis
+results_test = policy_impact_regression(test_data, "Testing Set", 
+                                        cluster_var = "RegionName", robust = TRUE)
+```
+
+# T-stat sum stats
+
+```{r}
+# Function to compute descriptive statistics for t-statistics
+compute_tstat_descriptives = function(data, variable = "t_stat") {
+  # Remove any missing values
+  values = data[[variable]][!is.na(data[[variable]])]
+  
+  # Compute descriptive statistics
+  stats = c(
+    Min = min(values),
+    Q1 = quantile(values, 0.25),
+    Median = median(values),
+    Mean = mean(values),
+    SD = sd(values),
+    Q3 = quantile(values, 0.75),
+    Max = max(values)
+  )
+  
+  return(round(stats, 3))
+}
+
+# Function to create comprehensive descriptive statistics table
+create_descriptive_table = function(regression_results, policy_descriptions) {
+  # Extract full results and dataset name
+  full_results = regression_results$full_results
+  dataset_name = regression_results$dataset_name
+  
+  # Initialize results data frame
+  results_df = data.frame()
+  
+  # Get unique policies from the data
+  unique_policies = unique(full_results$policy)
+  
+  # Compute statistics for each individual policy
+  for(policy in unique_policies) {
+    policy_data = full_results[full_results$policy == policy, ]
+    policy_stats = compute_tstat_descriptives(policy_data)
+    policy_row = data.frame(
+      Dataset = dataset_name,
+      Policy = policy_descriptions[policy],
+      t(policy_stats)
+    )
+    results_df = rbind(results_df, policy_row)
+  }
+  
+  # Compute overall statistics across all policies
+  overall_stats = compute_tstat_descriptives(regression_results$heatmap_data, "mean_abs_t_stat")
+  overall_row = data.frame(
+    Dataset = dataset_name,
+    Policy = "Overall (All Policies)",
+    t(overall_stats)
+  )
+  results_df = rbind(results_df, overall_row)
+  
+  return(results_df)
+}
+
+# Function to display formatted descriptive statistics
+display_descriptive_stats = function(descriptive_table) {
+  cat("T-STATISTIC DESCRIPTIVE STATISTICS\n")
+  cat("=====================================\n\n")
+  
+  # Split by dataset for organized display
+  datasets = unique(descriptive_table$Dataset)
+  
+  for(dataset in datasets) {
+    cat("Dataset:", dataset, "\n")
+    cat(paste(rep("-", nchar(dataset) + 9), collapse = ""), "\n")
+    
+    dataset_data = descriptive_table[descriptive_table$Dataset == dataset, ]
+    
+    # Create formatted output
+    for(i in 1:nrow(dataset_data)) {
+      policy_name = dataset_data$Policy[i]
+      stats = dataset_data[i, 3:9]  # Skip Dataset and Policy columns
+      
+      cat(sprintf("%-35s", policy_name))
+      cat(sprintf(" Min: %6.3f", stats$Min))
+      cat(sprintf(" Q1: %6.3f", stats$Q1))
+      cat(sprintf(" Median: %6.3f", stats$Median))
+      cat(sprintf(" Mean: %6.3f", stats$Mean))
+      cat(sprintf(" (SD: %6.3f)", stats$SD))
+      cat(sprintf(" Q3: %6.3f", stats$Q3))
+      cat(sprintf(" Max: %6.3f", stats$Max))
+      cat("\n")
+    }
+    cat("\n")
+  }
+}
+
+# Define policy descriptions mapping
+policy_descriptions = c(
+  "C1M" = "school_closing",
+  "C2M" = "workplace_closing", 
+  "C3M" = "cancel_public_events",
+  "C4M" = "restrictions_on_gatherings",
+  "C5M" = "close_public_transport",
+  "C6M" = "stay_at_home_policies",
+  "C7M" = "internal_travel_limits"
+)
+
+# Generate descriptive statistics for all datasets
+cat("=== COMPUTING T-STATISTIC DESCRIPTIVE STATISTICS ===\n")
+
+# Compute descriptive statistics for each dataset
+descriptives_full = create_descriptive_table(results_full, policy_descriptions)
+descriptives_train = create_descriptive_table(results_train, policy_descriptions)
+descriptives_test = create_descriptive_table(results_test, policy_descriptions)
+
+# Combine all descriptive statistics
+all_descriptives = rbind(descriptives_full, descriptives_train, descriptives_test)
+
+# Display the sum/descriptive stats
+display_descriptive_stats(all_descriptives)
+
+# Saving all_descriptives object
+save(all_descriptives, file = paste0(dir_data, "all_descriptives_tstatistic_heatmap_sumstats_updated.RData"))
+
+# Get the bucket name (same as your loading code)
+my_bucket = Sys.getenv('WORKSPACE_BUCKET')
+
+# Copy the files from local directory to the bucket's data folder
+system(paste0("gsutil cp ", paste0(dir_data, "all_descriptives_tstatistic_heatmap_sumstats_updated.RData"), my_bucket, "/data/"), intern=T)
+
+# Optional: Create a summary comparison table across datasets
+cat("=== SUMMARY COMPARISON: OVERALL T-STATISTICS BY DATASET ===\n")
+overall_comparison = all_descriptives[all_descriptives$Policy == "Overall (All Policies)", ]
+row.names(overall_comparison) = NULL
+print(overall_comparison[, -2], row.names = FALSE)  # Exclude Policy column for cleaner display
+
+```
+
+# T-stat heatmap viz
+```{r}
+# Function to check mean t-statistic ranges across datasets
+check_mean_tstat_ranges = function(results_full, results_train, results_test) {
+  
+  full_range = range(results_full$heatmap_data$mean_abs_t_stat, na.rm = TRUE)
+  train_range = range(results_train$heatmap_data$mean_abs_t_stat, na.rm = TRUE)  
+  test_range = range(results_test$heatmap_data$mean_abs_t_stat, na.rm = TRUE)
+  
+  cat("Mean absolute t-statistic ranges by dataset:\n")
+  cat("Full Sample: ", round(full_range[1], 2), "-", round(full_range[2], 2), "\n")
+  cat("Training Set:", round(train_range[1], 2), "-", round(train_range[2], 2), "\n")
+  cat("Testing Set: ", round(test_range[1], 2), "-", round(test_range[2], 2), "\n\n")
+  
+  global_max = max(c(full_range[2], train_range[2], test_range[2]), na.rm = TRUE)
+  cat("Recommended consistent scale: 0 to", round(global_max, 2), "\n")
+  
+  return(global_max)
+}
+
+# Function to create t-statistic heatmap
+create_tstat_heatmap = function(heatmap_data, dataset_name = "Dataset", max_mean_t_stat = NULL) {
+  # Ensure start_date is in Date format
+  heatmap_data$start_date = as.Date(heatmap_data$start_date)
+  
+  # Use provided max_mean_t_stat or calculate from data
+  if(is.null(max_mean_t_stat)) {
+    max_mean_t_stat = max(heatmap_data$mean_abs_t_stat, na.rm = TRUE)
+  }
+  
+  ggplot(heatmap_data, aes(x = start_date, y = duration, fill = mean_abs_t_stat)) +
+    geom_tile() +
+    scale_fill_gradient(
+      low = "white", 
+      high = "red",
+      breaks = seq(0, max_mean_t_stat, by = 0.50),  
+      limits = c(0, max_mean_t_stat)  
+    ) +
+    scale_x_date(
+      breaks = seq(
+        from = as.Date("2020-03-15"),
+        to = as.Date("2020-06-21"),
+        by = "1 week"
+      ),
+      date_labels = "%b %d",
+      expand = expansion(mult = c(0.01, 0.01))
+    ) +
+    scale_y_continuous(
+      breaks = seq(7, max(heatmap_data$duration), by = 7),
+      labels = function(x) paste(x, "days")
+    ) +
+    theme_classic() +  
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1, face = "bold"),
+      axis.text.y = element_text(face = "bold"),
+      plot.title = element_text(face = "bold", size = 14),
+      plot.subtitle = element_text(color = "gray40", size = 12),
+      legend.title = element_text(size = 10),
+      legend.text = element_text(size = 9),
+      legend.position = "right"
+    ) +
+    labs(
+      title = paste("Policy Impact Heatmap -", dataset_name),
+      subtitle = "Mean Absolute t-statistics for COVID Policy Effects on July Anxiety Scores",
+      x = "Exposure Window Start Date",
+      y = "Exposure Duration",
+      fill = "Mean |t-statistic|",
+      caption = "Adjusted for demographic, socioeconomic, and clinical covariates\nWeighted by inverse probability weights\nRobust standard errors clustered by region"
+    )
+}
+
+# Step 1: Check current ranges and get the global maximum
+cat("=== CHECKING T-STATISTIC RANGES ===\n")
+global_max = check_mean_tstat_ranges(results_full, results_train, results_test)
+
+# Step 2: Create heatmaps with consistent scale using the global maximum
+cat("\n=== CREATING CONSISTENT HEATMAPS ===\n")
+cat("Using consistent scale: 0 to", round(global_max, 2), "\n")
+
+# Create comparison heatmaps (full sample, train, test split)
+heatmap_full = create_tstat_heatmap(results_full$heatmap_data, "Full Sample")
+heatmap_train = create_tstat_heatmap(results_train$heatmap_data, "Training Set")
+heatmap_test = create_tstat_heatmap(results_test$heatmap_data, "Testing Set")
+
+# Save as a PDF (vector format, inherently high resolution for text and lines)
+ggsave(
+  filename = paste0(dir_viz, "heatmap_test_updated.pdf"),
+  plot = heatmap_test,
+  width = 10,  # inches
+  height = 8,   # inches
+  device = "pdf" # Specify the PDF device
+)
+
+ggsave(
+  filename = paste0(dir_viz, "heatmap_train_updated.pdf"),
+  plot = heatmap_train,
+  width = 10,  # inches
+  height = 8,   # inches
+  device = "pdf" # Specify the PDF device
+)
+
+```
+
+# Policy specific heatmaps
+```{r}
+# First, create policy-specific heatmap data frames
+create_policy_heatmap_data = function(regression_results) {
+  # Extract policy prefixes from full results
+  policy_prefixes = unique(regression_results$full_results$policy)
+  
+  # Create list to store policy-specific heatmaps
+  policy_data = list()
+  
+  # For each policy, create a specific heatmap dataset
+  for(prefix in policy_prefixes) {
+    # Filter results for this policy
+    policy_results = regression_results$full_results %>%
+      filter(policy == prefix)
+    
+    # Create heatmap data (using t_stat directly)
+    policy_data[[prefix]] = policy_results %>%
+      select(start_date, duration, t_stat) %>%
+      # Ensure data is properly sorted
+      arrange(start_date, duration)
+  }
+  
+  return(policy_data)
+}
+
+# Create a function to generate consistent heatmaps for each policy
+create_policy_heatmap = function(data, policy_name, policy_description, dataset_name = "", max_t_stat = NULL) {
+  # Check if data contains t_stat column
+  if(!"t_stat" %in% names(data)) {
+    stop("Policy heatmap data must contain 't_stat' column")
+  }
+  
+  # Ensure start_date is in Date format
+  data$start_date = as.Date(data$start_date)
+  
+  # Use provided max_t_stat or calculate from data
+  if(is.null(max_t_stat)) {
+    max_t_stat = max(data$t_stat, na.rm = TRUE)
+  }
+  
+  # Add dataset name to title if provided
+  title_text = if(dataset_name != "") {
+    paste("Policy Impact Heatmap:", policy_description, "-", dataset_name)
+  } else {
+    paste("Policy Impact Heatmap:", policy_description)
+  }
+  
+  ggplot(data, aes(x = start_date, y = duration, fill = t_stat)) +
+    geom_tile() +
+    scale_fill_gradient(
+      low = "white", 
+      high = "red",
+      breaks = seq(0, max_t_stat, by = 0.5),
+      limits = c(0, max_t_stat)  # Force consistent limits
+    ) +
+    scale_x_date(
+      breaks = seq(
+        from = as.Date("2020-03-15"),
+        to = as.Date("2020-06-21"),
+        by = "1 week"
+      ),
+      date_labels = "%b %d",
+      expand = expansion(mult = c(0.01, 0.01))
+    ) +
+    scale_y_continuous(
+      breaks = seq(7, max(data$duration), by = 7),
+      labels = function(x) paste(x, "days")
+    ) +
+    theme_classic() +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1, face = "bold"),
+      axis.text.y = element_text(face = "bold"),
+      plot.title = element_text(face = "bold", size = 14),
+      plot.subtitle = element_text(color = "gray40", size = 12),
+      legend.title = element_text(size = 10),
+      legend.text = element_text(size = 9),
+      legend.position = "right"
+    ) +
+    labs(
+      title = title_text,
+      subtitle = "Absolute t-statistics for Policy Effects on July Anxiety",
+      x = "Exposure Window Start Date",
+      y = "Exposure Duration",
+      fill = "|t-statistic|",  # Updated legend label
+      caption = "Adjusted for demographic, socioeconomic, and clinical covariates\nWeighted by inverse probability weights\nRobust standard errors clustered by region"
+    )
+}
+
+# # Define policy descriptions
+policy_descriptions = c(
+  "C1M" = "School Closing (C1M)",
+  "C2M" = "Workplace Closing (C2M)",
+  "C3M" = "Cancellation of Public Events (C3M)",
+  "C4M" = "Restrictions on Gatherings (C4M)",
+  "C5M" = "Public Transport Closure (C5M)",
+  "C6M" = "Stay at Home Requirements (C6M)",
+  "C7M" = "Internal Movement Restrictions (C7M)"
+)
+
+# Store results for organized access and individual policy analysis
+analysis_results = list(
+  full_sample = results_full,
+  training_set = results_train,
+  testing_set = results_test
+)
+
+# Generate policy data for all three datasets
+policy_data_full = create_policy_heatmap_data(analysis_results$full_sample)
+policy_data_train = create_policy_heatmap_data(analysis_results$training_set)
+policy_data_test = create_policy_heatmap_data(analysis_results$testing_set)
+
+# Create heatmaps for all datasets and policies
+policy_heatmaps = list(
+  full_sample = list(),
+  training_set = list(),
+  testing_set = list()
+)
+
+# Generate heatmaps for each policy and dataset
+for(prefix in names(policy_descriptions)) {
+  # Full sample heatmaps
+  if(prefix %in% names(policy_data_full)) {
+    policy_heatmaps$full_sample[[prefix]] = create_policy_heatmap(
+      policy_data_full[[prefix]], prefix, 
+      paste(policy_descriptions[prefix], "- Full Sample")
+    )
+  }
+  
+  # Training set heatmaps  
+  if(prefix %in% names(policy_data_train)) {
+    policy_heatmaps$training_set[[prefix]] = create_policy_heatmap(
+      policy_data_train[[prefix]], prefix, 
+      paste(policy_descriptions[prefix], "- Training Set")
+    )
+  }
+  
+  # Testing set heatmaps
+  if(prefix %in% names(policy_data_test)) {
+    policy_heatmaps$testing_set[[prefix]] = create_policy_heatmap(
+      policy_data_test[[prefix]], prefix, 
+      paste(policy_descriptions[prefix], "- Testing Set")
+    )
+  }
+}
+
+# Function to display policy comparison across datasets
+show_policy_comparison = function(policy_name, save_pdf = TRUE, filename = NULL) {
+  if(policy_name %in% names(policy_descriptions)) {
+    
+    # Step 1: Find the maximum t-statistic across all three datasets for this policy
+    max_t_stats = c()
+    
+    # Get max from each dataset
+    if(policy_name %in% names(policy_data_full)) {
+      max_t_stats = c(max_t_stats, max(policy_data_full[[policy_name]]$t_stat, na.rm = TRUE))
+    }
+    if(policy_name %in% names(policy_data_train)) {
+      max_t_stats = c(max_t_stats, max(policy_data_train[[policy_name]]$t_stat, na.rm = TRUE))
+    }
+    if(policy_name %in% names(policy_data_test)) {
+      max_t_stats = c(max_t_stats, max(policy_data_test[[policy_name]]$t_stat, na.rm = TRUE))
+    }
+    
+    # Use the overall maximum across all datasets
+    overall_max = max(max_t_stats, na.rm = TRUE)
+    
+    cat("Using consistent t-statistic scale: 0 to", round(overall_max, 2), "\n")
+    
+    # Step 2: Recreate plots with consistent scale
+    plot_full = create_policy_heatmap(
+      policy_data_full[[policy_name]], 
+      policy_name, 
+      policy_descriptions[policy_name], 
+      "Full Sample",
+      max_t_stat = overall_max
+    )
+    
+    plot_train = create_policy_heatmap(
+      policy_data_train[[policy_name]], 
+      policy_name, 
+      policy_descriptions[policy_name], 
+      "Training Set",
+      max_t_stat = overall_max
+    )
+    
+    plot_test = create_policy_heatmap(
+      policy_data_test[[policy_name]], 
+      policy_name, 
+      policy_descriptions[policy_name], 
+      "Testing Set",
+      max_t_stat = overall_max
+    )
+    
+    # Step 3: Create the combined plot
+    combined_plot = grid.arrange(
+      plot_full, plot_train, plot_test,
+      ncol = 3,
+      top = textGrob(paste(policy_descriptions[policy_name], "- Dataset Comparison"),
+                     gp = gpar(fontsize = 12, fontface = "bold"))
+    )
+    
+    if(save_pdf) {
+      # Generate filename if not provided
+      if(is.null(filename)) {
+        filename = paste0(dir_viz, "policy_comparison_", policy_name, "_updated.pdf")
+      }
+      
+      # Save as PDF
+      ggsave(
+        filename = filename,
+        plot = combined_plot,
+        width = 30, 
+        height = 8,   
+        device = "pdf"
+      )
+      
+      cat("Policy comparison saved as:", filename, "\n")
+    }
+    
+    return(combined_plot)
+    
+  } else {
+    cat("Policy not found. Available policies:", paste(names(policy_descriptions), collapse = ", "), "\n")
+  }
+}
+
+# Function to display all policies for one dataset
+show_all_policies_dataset = function(dataset_name, save_pdf = TRUE, filename = NULL) {
+  if(dataset_name %in% names(policy_heatmaps)) {
+    
+    # Find the maximum t-statistic across all policies for this dataset
+    dataset_policy_data = switch(dataset_name,
+                                 "full_sample" = policy_data_full,
+                                 "training_set" = policy_data_train,
+                                 "testing_set" = policy_data_test
+    )
+    
+    all_t_stats = c()
+    for(policy in names(dataset_policy_data)) {
+      all_t_stats = c(all_t_stats, dataset_policy_data[[policy]]$t_stat)
+    }
+    
+    overall_max = max(all_t_stats, na.rm = TRUE)
+    
+    cat("Using consistent t-statistic scale for", dataset_name, ": 0 to", round(overall_max, 2), "\n")
+    
+    # Recreate plots with consistent scale
+    consistent_plots = list()
+    for(policy in names(policy_descriptions)) {
+      if(policy %in% names(dataset_policy_data)) {
+        consistent_plots[[policy]] = create_policy_heatmap(
+          dataset_policy_data[[policy]], 
+          policy, 
+          policy_descriptions[policy], 
+          gsub("_", " ", stringr::str_to_title(dataset_name)),
+          max_t_stat = overall_max
+        )
+      }
+    }
+    
+    # Create the combined plot
+    combined_plot = grid.arrange(
+      grobs = consistent_plots,
+      ncol = 3,
+      nrow = 3,
+      top = textGrob(paste("All Policies -", gsub("_", " ", stringr::str_to_title(dataset_name))),
+                     gp = gpar(fontsize = 14, fontface = "bold"))
+    )
+    
+    if(save_pdf) {
+      # Generate filename if not provided
+      if(is.null(filename)) {
+        clean_dataset_name = gsub("_", "_", dataset_name)
+        filename = paste0(dir_viz, "all_policies_", clean_dataset_name, "_updated.pdf")
+      }
+      
+      # Save as PDF
+      ggsave(
+        filename = filename,
+        plot = combined_plot,
+        width = 15,  # inches
+        height = 12,  # inches  
+        device = "pdf"
+      )
+      
+      cat("All policies plot saved as:", filename, "\n")
+      
+      # Display the PDF
+      # file.show(filename)
+    }
+    
+    return(combined_plot)
+    
+  } else {
+    cat("Dataset not found. Available datasets: full_sample, training_set, testing_set\n")
+  }
+}
+
+# Function to check t-statistic ranges (helpful for verification)
+check_tstat_ranges = function() {
+  cat("T-statistic ranges by policy and dataset:\n\n")
+  
+  for(policy in names(policy_descriptions)) {
+    cat("Policy:", policy, "-", policy_descriptions[policy], "\n")
+    
+    if(policy %in% names(policy_data_full)) {
+      full_range = range(policy_data_full[[policy]]$t_stat, na.rm = TRUE)
+      cat("  Full Sample: ", round(full_range[1], 2), "-", round(full_range[2], 2), "\n")
+    }
+    
+    if(policy %in% names(policy_data_train)) {
+      train_range = range(policy_data_train[[policy]]$t_stat, na.rm = TRUE)
+      cat("  Training Set:", round(train_range[1], 2), "-", round(train_range[2], 2), "\n")
+    }
+    
+    if(policy %in% names(policy_data_test)) {
+      test_range = range(policy_data_test[[policy]]$t_stat, na.rm = TRUE)
+      cat("  Testing Set: ", round(test_range[1], 2), "-", round(test_range[2], 2), "\n")
+    }
+    
+    cat("\n")
+  }
+}
+
+# Check current t-statistic ranges (helpful for verification)
+check_tstat_ranges()
+
+# View specific policy across all datasets
+show_policy_comparison("C1M")  # School closing across full/train/test
+show_policy_comparison("C2M")  
+show_policy_comparison("C3M")  
+show_policy_comparison("C4M")  
+show_policy_comparison("C5M")  
+show_policy_comparison("C6M")  # Stay at home across full/train/test
+show_policy_comparison("C7M")  
+
+# View all policies for one dataset  
+show_all_policies_dataset("full_sample")    # All policies for full sample
+show_all_policies_dataset("training_set")   # All policies for training set
+show_all_policies_dataset("testing_set")    # All policies for testing set
+
+# Access individual plots
+policy_heatmaps$full_sample[["C1M"]]         # School closing - full sample
+policy_heatmaps$training_set[["C2M"]]        # Workplace closing - training set
+policy_heatmaps$testing_set[["C6M"]]         # Stay at home - testing set
+
+# Tell RStudio to use ragg for its plots
+options(device = ragg::agg_png)
+
+# Save as a PDF (vector format, inherently high resolution for text and lines)
+
+for (exposure in c("C1M", "C2M", "C3M", "C4M", "C5M", "C6M", "C7M")){
+  ggsave(
+    filename = paste0(dir_viz, "policy_heatmap_training_", exposure, "_updated.pdf"),
+    plot = policy_heatmaps$training_set[[exposure]],
+    width = 10,  # inches
+    height = 8,   # inches
+    device = "pdf" # Specify the PDF device
+  )
+  
+}
+
+```
+

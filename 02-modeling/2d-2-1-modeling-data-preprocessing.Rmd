@@ -644,6 +644,8 @@ print(stratum_verification)
 
 # Performing rerandomization with lowest auc
 
+# Get covariates
+
 ```{r}
 # Get covariates
 
@@ -655,7 +657,7 @@ balance_covariates = c(
   "age_2020", "home", "maritalstatus", "race", "education", "employment", 
   "insurance", "anxiety_disorder_before_covid_lifetime", "anxiety_disorder_1yr_before_covid", 
   "sex", "birthplace", "generalized_anxiety_disorder_before_covid_lifetime",
-  "generalized_anxiety_disorder_1yr_before_covid", "gad_score_avg_july",
+  "generalized_anxiety_disorder_1yr_before_covid", "gad_score_july",
   "observation_wt_trim"
 )
 
@@ -670,6 +672,15 @@ if(length(missing_covariates) > 0) {
 cat("Analyzing balance for", length(existing_covariates), "covariates:\n")
 cat(paste(existing_covariates, collapse = ", "), "\n\n")
 ```
+
+```{r}
+# Get exisiting covariates with exposure variables
+
+exposure_covariates <- grep("^C[1-7]", names(cope_auo_full), value = TRUE)
+full_covariates <- c(existing_covariates, exposure_covariates)
+
+```
+
 
 # Balance stats
 
@@ -852,12 +863,6 @@ cat("Mean absolute standardized mean difference:",
     round(mean(abs(balance_results_pre_rerand$smd), na.rm = TRUE), 3), "\n")
 cat("Number of covariates with |SMD| > 0.1:", 
     sum(abs(balance_results_pre_rerand$smd) > 0.1, na.rm = TRUE), "\n\n")
-```
-
-# Add exposure variables to existing covariates
-
-```{r}
-
 ```
 
 
@@ -1425,7 +1430,7 @@ policy_impact_regression = function(dataset, dataset_name = "Dataset", cluster_v
     # Construct regression formula
     formula = reformulate(
       termlabels = c(policy_col, covariates),
-      response = "gad_score_avg_july"
+      response = "gad_score_july"
     )
     
     # Run weighted regression

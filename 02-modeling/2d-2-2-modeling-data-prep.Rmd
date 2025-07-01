@@ -233,6 +233,11 @@ add_stringency_to_cope = function(cope_data, stringency_index = "march_15_june_3
 }
 ```
 
+# Check VIF
+
+```{r}
+
+```
 
 
 # Loop for exposure windows
@@ -314,7 +319,6 @@ for (i in seq_along(period_keys)) {
   assign(paste0("cope_auo_july_no_miss_w_stringency", tolower(suffixes[i])), copy(cope_auo_july_no_miss_w_stringency))
 }
 ```
-
 
 # Export
 

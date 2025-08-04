@@ -172,11 +172,11 @@ period_keys <- c("20200315_20200627", "20200322_20200523", "20200412_20200523")
 suffixes <-c("_March_15_June_27", "_March_22_May_23", "_April_12_May_23")
 stringency_keys <- c("march_15_june_30", "march_22_may_23", "april_12_may_23")
 
-# For trial check . Uncomment if you want to check
-period_keys <- c("20200315_20200627")
-suffixes <-c("_March_15_June_27")
-stringency_keys <- c("march_15_june_30")
-i = 1
+# # For trial check . Uncomment if you want to check
+# period_keys <- c("20200315_20200627")
+# suffixes <-c("_March_15_June_27")
+# stringency_keys <- c("march_15_june_30")
+# i = 1
 
 results_est_list <- list()
 results_hicc_list <- list()

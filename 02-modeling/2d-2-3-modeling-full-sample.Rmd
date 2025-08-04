@@ -114,7 +114,8 @@ required_packages = c(
   'tidymodels',   # Used for train/test split 
   'data.table',   # Enhanced structure for storing data 
   'rsample',      # For split
-  'kableExtra'
+  'kableExtra',
+  'openxlsx'
 )
 
 # Run the function to install (if needed) and load the packages
@@ -171,16 +172,15 @@ period_keys <- c("20200315_20200627", "20200322_20200523", "20200412_20200523")
 suffixes <-c("_March_15_June_27", "_March_22_May_23", "_April_12_May_23")
 stringency_keys <- c("march_15_june_30", "march_22_may_23", "april_12_may_23")
 
-# # For trial check . Uncomment if you want to check
-# period_keys <- c("20200315_20200627")
-# suffixes <-c("_March_15_June_27")
-# stringency_keys <- c("march_15_june_30")
-# i = 1
+# For trial check . Uncomment if you want to check
+period_keys <- c("20200315_20200627")
+suffixes <-c("_March_15_June_27")
+stringency_keys <- c("march_15_june_30")
+i = 1
 
 results_est_list <- list()
 results_hicc_list <- list()
 results_weight_list <- list()
-
 
 for (i in seq_along(period_keys)) {
   
@@ -279,16 +279,66 @@ for (i in seq_along(period_keys)) {
                      c("Stringency")
                      )
   
+  # Export regression to Excel
+  ## Create or load the workbook
+  if(!exists("wb")){ # ensure no wb is present in the environment for this particular R file
+    wb <- createWorkbook()
+  }
+  
+  ## Set digit format
+  options("openxlsx.numFmt" = "0.000")
+  
+  ## Tidy model output
+  regression_results <- broom::tidy(qgcomp_all_components$fit)
+  
+  ## Define sheet name
+  sheet_name <- paste0("full", suffixes[i])
+  
+  ## Add sheet to workbook
+  addWorksheet(wb, sheet_name)
+  
+  ## Write the data to the sheet
+  writeData(wb, sheet = sheet_name, x = regression_results)
+  
+  ## Auto-adjust column widths
+  setColWidths(wb, sheet = sheet_name, cols = 1:ncol(regression_results), widths = "auto")
+  
+  ## Identify relevant columns
+  pval_col <- which(names(regression_results) == "p.value")
+  est_col  <- which(names(regression_results) == "estimate")
+  
+  ## Apply conditional formatting for p val
+  if (!is.na(pval_col) && length(pval_col) > 0) {
+    conditionalFormatting(
+      wb, sheet = sheet_name,
+      cols = pval_col,
+      rows = 2:(nrow(regression_results) + 1),  # +1 for header
+      rule = "<0.05",
+      style = createStyle(fontColour = "black", bgFill = "#63BE7B")
+    )
+  }
+  
+  ## Apply conditional formatting for estimates
+  if (!is.na(est_col) && length(est_col) > 0) {
+    conditionalFormatting(
+      wb, sheet = sheet_name,
+      cols = est_col,
+      rows = 2:(nrow(regression_results) + 1),
+      type = "colourScale",
+      style = c("#F8696B", "#FFFFFF", "#63BE7B")  # red-white-green scale
+    )
+  }
+
+  
   # Init results df
   result_est_df <- data.frame()
   result_hicc_df <- data.frame()
   result_weight_df <- data.frame(exposure = all_list, stringsAsFactors = FALSE)
-  consolidation_set = FALSE
   
   # Loop over exposures
   
   # # For check
-  # exp = neg_list
+  # exp = c("C1M")
   
   for(exp in exposure_list){
     
@@ -319,6 +369,7 @@ for (i in seq_along(period_keys)) {
         
         dynamic_covariates <- c(paste0(exp_vals, suffixes[i]))
         exposure_names <- c(paste0(exp_vals, suffixes[i]))
+        exposures_to_extract <- c(paste0(exp_vals, suffixes[i]))
         full_covariates <- c(static_covariates, dynamic_covariates)
         fml <- as.formula(paste("gad_score_july ~", paste(full_covariates, collapse = " + ")))
       
@@ -327,6 +378,7 @@ for (i in seq_along(period_keys)) {
       
         dynamic_covariates <- c(paste0("stringency", "_", stringency_keys[i]))
         exposure_names <- c(paste0("stringency", "_", stringency_keys[i]))
+        exposures_to_extract <- c(paste0("stringency", "_",  stringency_keys[i]))
         full_covariates <- c(static_covariates, dynamic_covariates)
         fml <- as.formula(paste("gad_score_july ~", paste(full_covariates, collapse = " + ")))
       }
@@ -341,8 +393,9 @@ for (i in seq_along(period_keys)) {
       }
       
       print(paste0("Processing for ", consolidation_name))
-      dynamic_covariates <- c(paste0(exp_vals, suffixes[i]))
-      exposure_names <- c(paste0(exp_vals, suffixes[i]))
+      dynamic_covariates <- c(paste0(all_list, suffixes[i]))
+      exposure_names <- c(paste0(all_list, suffixes[i]))
+      exposures_to_extract <- c(paste0(exp_vals, suffixes[i]))
       full_covariates <- c(static_covariates, dynamic_covariates)
       fml <- as.formula(paste("gad_score_july ~", paste(full_covariates, collapse = " + ")))
       
@@ -355,11 +408,12 @@ for (i in seq_along(period_keys)) {
                                         weights = qgcomp_weights_total_sample,
                                         q = NULL,
                                         bayes = FALSE) 
+    
     # Get fitting weights for mixtures
-    if (consolidation_set) {
+    if (setequal(exp_vals, all_list)) {
       
       ## combine pos and neg weights into a named vector
-      weights <- c(model_qgcomp$pos.weights, model_qgcomp$neg.weights)
+      weights <- c(model_qgcomp$pos.weights, -1*model_qgcomp$neg.weights)
       
       ## update names
       names(weights) <- sub(pattern = paste0(suffixes[i], "$"), replacement = "", names(weights))
@@ -401,7 +455,7 @@ for (i in seq_along(period_keys)) {
                                cluster_robust = TRUE, 
                                robust_type = "HC1", 
                                cluster_var = cope_auo_july_no_miss_w_stringency$RegionName, 
-                               exposure_names = exposure_names)
+                               exposure_names = exposures_to_extract)
     
     if(!consolidation_set){
       robust_df <- cbind(components = sub(pattern = suffixes[i], 
@@ -430,6 +484,9 @@ for (i in seq_along(period_keys)) {
   results_weight_list[[sub("^_", "", suffixes[i])]] <- result_weight_df
   
 }
+
+# ## Save workbook
+# saveWorkbook(wb, paste0(dir_tables, "qgcomp_regression_results.xlsx"), overwrite = TRUE)
 
 ## View results
 results_est_list
@@ -617,6 +674,31 @@ system(paste0("gsutil cp ", destination_filename, " ", my_bucket, "/data/"), int
 
 # Check if file is in the bucket
 system(paste0("gsutil ls ", my_bucket, "/data/*.html"), intern=T)
+
+
+# SAVE IN BUCKET: REGRESSION RESULTS
+file_to_save <- copy(wb)
+
+# Replace with THE NAME of the file you're going to store in the bucket (don't delete the quotation marks)
+destination_filename = paste0(dir_tables, "qgcomp_regression_results_1.xlsx")
+
+########################################################################
+##
+################# DON'T CHANGE FROM HERE ###############################
+##
+########################################################################
+
+# store the dataframe in current workspace
+saveWorkbook(file_to_save, destination_filename, overwrite = TRUE)
+
+# Get the bucket name
+my_bucket = Sys.getenv('WORKSPACE_BUCKET')
+
+# Copy the file from current workspace to the bucket
+system(paste0("gsutil cp ", destination_filename, " ", my_bucket, "/data/"), intern=T)
+
+# Check if file is in the bucket
+system(paste0("gsutil ls ", my_bucket, "/data/*.xlsx"), intern=T)
 
 ```
 

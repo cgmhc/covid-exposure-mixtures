@@ -114,7 +114,8 @@ required_packages = c(
   'tidymodels',   # Used for train/test split 
   'data.table',   # Enhanced structure for storing data 
   'rsample',      # For split
-  'kableExtra'
+  'kableExtra',
+  'openxlsx'
 )
 
 # Run the function to install (if needed) and load the packages
@@ -131,6 +132,11 @@ dir_tables <- here::here(paste0("02-modeling/tables/"))
 ```
 
 # Load data
+
+```{r}
+# Load excel
+wb <- loadWorkbook(paste0(dir_tables, "qgcomp_regression_results_5.xlsx"))
+```
 
 ```{r}
 # Source from bucket
@@ -286,7 +292,7 @@ for (i in seq_along(period_keys)) {
   # Loop over exposures
   
   # # For check. Uncomment if you want to check
-  # exp = c("C1M")
+  # exp = c(all_list)
   
   for(exp in exposure_list){
     
@@ -317,16 +323,20 @@ for (i in seq_along(period_keys)) {
         
         dynamic_covariates <- c(paste0(exp_vals, suffixes[i]))
         exposure_names <- c(paste0(exp_vals, suffixes[i]))
+        exposures_to_extract <- c(paste0(exp_vals, suffixes[i]))
         full_covariates <- c(static_covariates, dynamic_covariates)
         fml <- as.formula(paste("gad_score_july ~", paste(full_covariates, collapse = " + ")))
+        consolidation_set = FALSE
       
       } else {
         print(paste0("Processing for ", exp_vals))
       
         dynamic_covariates <- c(paste0("stringency", "_", stringency_keys[i]))
         exposure_names <- c(paste0("stringency", "_", stringency_keys[i]))
+        exposures_to_extract <- c(paste0("stringency", "_",  stringency_keys[i]))
         full_covariates <- c(static_covariates, dynamic_covariates)
         fml <- as.formula(paste("gad_score_july ~", paste(full_covariates, collapse = " + ")))
+        consolidation_set = FALSE
       }
     } else {
       consolidation_set = TRUE
@@ -339,8 +349,9 @@ for (i in seq_along(period_keys)) {
       }
       
       print(paste0("Processing for ", consolidation_name))
-      dynamic_covariates <- c(paste0(exp_vals, suffixes[i]))
-      exposure_names <- c(paste0(exp_vals, suffixes[i]))
+      dynamic_covariates <- c(paste0(all_list, suffixes[i]))
+      exposure_names <- c(paste0(all_list, suffixes[i]))
+      exposures_to_extract <- c(paste0(exp_vals, suffixes[i]))
       full_covariates <- c(static_covariates, dynamic_covariates)
       fml <- as.formula(paste("gad_score_july ~", paste(full_covariates, collapse = " + ")))
       
@@ -358,11 +369,103 @@ for (i in seq_along(period_keys)) {
     test_set_eval <-  qgcomp.model.mixture(object = model_qgcomp,
                                            data_eval = test_data_df,
                                            observation_wt_col= c("observation_wt_trim"),
-                                           exposure_names = exposure_names)
+                                           exposure_names = exposures_to_extract,
+                                           norm_wt = TRUE,
+                                           weighted = TRUE)
 
-  
+    
     model_test <- test_set_eval$model
     test_data_new <- test_set_eval$new_data
+    
+   
+    
+    if(TRUE){
+    new_wb <- test_set_eval$wb
+    new_reg_results <- test_set_eval$regression_results
+    
+    # Add excel sheet
+    if(consolidation_set){
+      
+      ## Get sheet names
+      new_sheet_names <- names(new_wb)
+      
+      ## Loop over sheet indices
+      for (j in seq_along(new_sheet_names)) {
+        sheet_data <- readWorkbook(new_wb, sheet = new_sheet_names[j])
+        
+        ## Define new sheet name
+        new_sheet_name <- paste0("ww_", stringr::str_sub(consolidation_name, 1, 8), suffixes[i])
+        print(new_sheet_name)
+        
+        ## Add a new sheet to old_wb with the new name and write the data
+        addWorksheet(wb, new_sheet_name)
+        writeData(wb, sheet = new_sheet_name, x = sheet_data)
+        
+        ## Auto-adjust column widths
+        setColWidths(wb, sheet = new_sheet_name, cols = 1:ncol(new_reg_results), widths = "auto")
+        
+        ## Identify relevant columns
+        pval_col <- which(names(new_reg_results) == "p.value")
+        est_col  <- which(names(new_reg_results) == "estimate")
+        
+        ## Apply conditional formatting for p val
+        if (!is.na(pval_col) && length(pval_col) > 0) {
+          conditionalFormatting(
+            wb, sheet = new_sheet_name,
+            cols = pval_col,
+            rows = 2:(nrow(new_reg_results) + 1),  # +1 for header
+            rule = "<0.05",
+            style = createStyle(fontColour = "black", bgFill = "#63BE7B")
+          )
+        }
+        
+        
+        ## Apply conditional formatting for estimates
+        if (!is.na(est_col) && length(est_col) > 0) {
+          conditionalFormatting(
+            wb, sheet = new_sheet_name,
+            cols = est_col,
+            rows = 2:(nrow(new_reg_results) + 1),
+            type = "colourScale",
+            style = c("#F8696B", "#FFFFFF", "#63BE7B")  # red-white-green scale
+          )
+        }
+        
+        ## Apply formatting for mixture_score
+        mix_row_index <- which(new_reg_results$term == "mixture_score")
+        
+        if (length(mix_row_index) > 0) {
+          highlight_style <- createStyle(fgFill = "#FFFF00")
+        
+          addStyle(
+            wb, sheet = new_sheet_name,
+            style = highlight_style,
+            rows = mix_row_index + 1,  # +1 for header row
+            cols = 1:ncol(new_reg_results),
+            gridExpand = TRUE,
+            stack = TRUE
+          )
+        }
+        
+          # Visualization
+          mix_dist_plot <- ggplot(test_data_new, aes(x = mixture_score)) +
+            geom_histogram(aes(y = ..density..), bins = 30, fill = "skyblue", alpha = 0.6, color = "black") +
+            geom_density(color = "darkblue", linewidth = 1) +
+            labs(title = "Distribution of mixture_score",
+                 x = "mixture_score", y = "Density") +
+            theme_minimal()
+          plot_file <- tempfile(fileext = ".png")
+          ggsave(plot_file, plot = mix_dist_plot, width = 6, height = 4, dpi = 300, bg = "white")
+          
+          ## Add image
+          insertImage(wb, sheet = new_sheet_name, file = plot_file,
+            width = 6, height = 4,
+            startRow = 1,  # top-aligned
+            startCol = ncol(new_reg_results) + 3)
+        
+      }
+    }
+    }
     
     # Add weights before transfer
     # Add mixture distribution for states, maybe subplot later. chloropleth map for viz at later stages
@@ -483,7 +586,7 @@ result_df_kable <- final_df_bold %>%
                booktabs = TRUE, 
                format = "html", 
                escape = FALSE,
-               caption =  paste0("Quantile gcomp test sample results: refit eval")) %>%
+               caption =  paste0("Quantile gcomp test sample results: refit eval wts weighted")) %>%
   kable_styling(font_size = 15, fixed_thead = TRUE, bootstrap_options = c("striped", "hover"))
 
 print(result_df_kable)
@@ -499,7 +602,7 @@ result_hicc_kable <- final_df %>%
                booktabs = TRUE, 
                format = "html", 
                escape = FALSE,
-               caption = paste0("Quantile gcomp test sample hicc: refit eval")) %>%
+               caption = paste0("Quantile gcomp test sample hicc: refit eval wts weighted")) %>%
   kable_styling(font_size = 15, fixed_thead = TRUE, bootstrap_options = c("striped", "hover"))
 
 print(result_hicc_kable)
@@ -510,15 +613,15 @@ print(result_hicc_kable)
 
 ```{r}
 # Save locally
-save_kable(result_df_kable, paste0(dir_tables, "qgcomp_test_sample_results_refit_eval.html"))
-save_kable(result_hicc_kable, paste0(dir_tables, "qgcomp_test_sample_hicc_refit_eval.html"))
+save_kable(result_df_kable, paste0(dir_tables, "qgcomp_test_sample_results_refit_eval_wt_weighted.html"))
+save_kable(result_hicc_kable, paste0(dir_tables, "qgcomp_test_sample_hicc_refit_eval_wt_weighted.html"))
 
 # SAVE IN BUCKET: RESULT
 
 file_to_save <- copy(result_df_kable)
 
 # Replace with THE NAME of the file you're going to store in the bucket (don't delete the quotation marks)
-destination_filename = paste0(dir_tables, "qgcomp_test_sample_results_refit_eval.html")
+destination_filename = paste0(dir_tables, "qgcomp_test_sample_results_refit_eval_wt_weighted.html")
 
 ########################################################################
 ##
@@ -543,7 +646,7 @@ system(paste0("gsutil ls ", my_bucket, "/data/*.html"), intern=T)
 file_to_save <- copy(result_hicc_kable)
 
 # Replace with THE NAME of the file you're going to store in the bucket (don't delete the quotation marks)
-destination_filename = paste0(dir_tables, "qgcomp_test_sample_hicc_refit_eval.html")
+destination_filename = paste0(dir_tables, "qgcomp_test_sample_hicc_refit_eval_wt_weighted.html")
 
 ########################################################################
 ##
@@ -562,6 +665,31 @@ system(paste0("gsutil cp ", destination_filename, " ", my_bucket, "/data/"), int
 
 # Check if file is in the bucket
 system(paste0("gsutil ls ", my_bucket, "/data/*.html"), intern=T)
+
+# SAVE IN BUCKET: REGRESSION RESULTS
+file_to_save <- copy(wb)
+
+# Replace with THE NAME of the file you're going to store in the bucket (don't delete the quotation marks)
+destination_filename = paste0(dir_tables, "qgcomp_regression_results_6.xlsx")
+
+########################################################################
+##
+################# DON'T CHANGE FROM HERE ###############################
+##
+########################################################################
+
+# store the dataframe in current workspace
+saveWorkbook(file_to_save, destination_filename, overwrite = TRUE)
+
+# Get the bucket name
+my_bucket = Sys.getenv('WORKSPACE_BUCKET')
+
+# Copy the file from current workspace to the bucket
+system(paste0("gsutil cp ", destination_filename, " ", my_bucket, "/data/"), intern=T)
+
+# Check if file is in the bucket
+system(paste0("gsutil ls ", my_bucket, "/data/*.xlsx"), intern=T)
+
 ```
 
 # Loop for Age Stratified Modeling

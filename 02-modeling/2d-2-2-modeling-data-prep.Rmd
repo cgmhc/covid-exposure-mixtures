@@ -63,9 +63,6 @@ source(here::here("2d-qgcomp-custom.R"))
 
 # Load datasets
 
-
-# Load data
-
 ```{r}
 # This snippet assumes that you run setup first
 
@@ -137,7 +134,7 @@ combined_exposure_data = combined_exposure_data_clean
 # Train data
 
 ## Define the filename for the train data parquet file
-filename = "train_data_strat_pre_randomization.parquet"
+filename = "train_data_100_rerandomizations_seed_17496.parquet"
 
 ## Get the bucket name from the environment
 my_bucket = Sys.getenv('WORKSPACE_BUCKET')
@@ -158,7 +155,7 @@ train_data <- read_parquet(filename)
 # Test data
 
 ## Define the filename for the test data parquet file
-filename = "test_data_strat_pre_randomization.parquet"
+filename = "test_data_100_rerandomizations_seed_17496.parquet"
 
 ## Get the bucket name from the environment
 my_bucket = Sys.getenv('WORKSPACE_BUCKET')
@@ -174,10 +171,32 @@ print(list.files())
 test_data <- read_parquet(filename)
 ```
 
-
+```{r}
+# Load column map
+load(file = paste0(dir_data, "2d_column_map.RData"))
+```
 
 
 # Preprocess data
+```{r}
+# Apply mapping for modeling
+## train
+train_data <- train_data %>%
+  rename_with(~ {
+    idx = match(., column_map$old_name)
+    ifelse(is.na(idx), ., column_map$new_name[idx])
+  })
+
+## test
+test_data = test_data %>%
+  rename_with(~ {
+    idx = match(., column_map$old_name)
+    ifelse(is.na(idx), ., column_map$new_name[idx])
+  })
+
+```
+
+
 ```{r}
 # Creating stringency objects
 stringency_march_15_june_30 = stringency_averages[, .(state, stringency_march_15_june_30)]
@@ -234,10 +253,7 @@ add_stringency_to_cope = function(cope_data, stringency_index = "march_15_june_3
 ```
 
 # Check VIF
-
-```{r}
-
-```
+to do
 
 
 # Loop for exposure windows
@@ -347,7 +363,7 @@ my_bucket = Sys.getenv('WORKSPACE_BUCKET')
 system(paste0("gsutil cp ", destination_filename, " ", my_bucket, "/data/"), intern=T)
 
 # Check if file is in the bucket
-print(system(paste0("gsutil ls ", my_bucket, "/data/*.RData"), intern=T))
+print(system(paste0("gsutil ls ", my_bucket, "/data/*.parquet"), intern=T))
 ```
 
 

@@ -2,7 +2,9 @@
 qgcomp.model.mixture <- function(object, 
                              data_eval, 
                              observation_wt_col,
-                             exposure_names){
+                             exposure_names,
+                             norm_wt = TRUE,
+                             weighted = FALSE){
   
   ## Check class
   if (inherits(object, "qgcompfit")) {
@@ -21,11 +23,25 @@ qgcomp.model.mixture <- function(object,
     stop("observation_wt_col must be a non-empty character vector of length 1.")
   }
   
-  ## Extract weights
-  wts <- c(object$pos.weights, object$neg.weights)
+  if(norm_wt){
+    ## Extract weights
+    wts <- c(object$pos.weights, object$neg.weights)
+    
+    ## set sheet name
+    name_prefix <- "wt_trans"
+  } else {
+    wts <- object$fit$coefficients[exposure_names]
+    
+    ## set sheet name
+    name_prefix <- "coef_trans"
+  }
   
   ## Multiply exposure training weights with exposure columns
-  data_eval$mixture_score <- rowSums(wts*data_eval[, names(wts), drop = FALSE])
+  if(!weighted){
+    data_eval$mixture_score <- rowSums(wts*data_eval[, names(wts), drop = FALSE])
+  } else {
+    data_eval$mixture_score <- rowSums(wts * data_eval[, names(wts), drop = FALSE]) / sum(wts)
+  }
   
   print("Summary of test mixture score column")
   print(summary(data_eval$mixture_score))
@@ -57,15 +73,146 @@ qgcomp.model.mixture <- function(object,
   model_mix <- eval(substitute(glm(formula = formula_str, family = "gaussian", data = data_eval, weights = W), list(W = as.name(observation_wt_col))))
   model_mix
   
+  # Create or load the workbook
+  wb <- createWorkbook()
+    
+  ## Get extension
+  name_suffix <- sub(".*(?:C[1-7]M|stringency)", "", exposure_names[1])
+    
+  ## Set digit format
+  options("openxlsx.numFmt" = "0.000")
+    
+  ## Tidy model output
+  regression_results <- broom::tidy(model_mix)
+    
+  ## Define sheet name
+  sheet_name <- paste0(name_prefix, name_suffix)
+    
+  ## Add sheet to workbook
+  addWorksheet(wb, sheet_name)
+    
+  ## Write the data to the sheet
+  writeData(wb, sheet = sheet_name, x = regression_results)
+    
+  ## Auto-adjust column widths
+  setColWidths(wb, sheet = sheet_name, cols = 1:ncol(regression_results), widths = "auto")
+  
   # Return
   ## return object
   eval_object <- list()
-  eval_object$model <- copy(model_mix)
-  eval_object$new_data <- copy(data_eval)
+  eval_object$model <- model_mix
+  eval_object$new_data <- data_eval
+  eval_object$wb <- wb
+  eval_object$regression_results <- regression_results
   
   return(eval_object)
   
 }
+
+
+# Function to get individual scaled mixture components
+qgcomp.model.mixture.ind <- function(object, 
+                                 data_eval, 
+                                 observation_wt_col,
+                                 exposure_names,
+                                 norm_wt = TRUE){
+  
+  ## Check class
+  if (inherits(object, "qgcompfit")) {
+    message("This is a qgcomp object.")
+  } else {
+    stop("Pass a valid qgcomp object.")
+  }
+  
+  ## Check if data_eval is a data.frame
+  if (!is.data.frame(data_eval)) {
+    stop("data_eval must be a data.frame.")
+  }
+  
+  ## Check if observation_wt_col is a non-empty string of length 1
+  if (!is.character(observation_wt_col) || length(observation_wt_col) != 1 || observation_wt_col == "") {
+    stop("observation_wt_col must be a non-empty character vector of length 1.")
+  }
+  
+  if(norm_wt){
+    ## Extract weights
+    wts <- c(object$pos.weights, object$neg.weights)
+    
+    ## set sheet name
+    name_prefix <- "wt_trans"
+  } else {
+    wts <- object$fit$coefficients[exposure_names]
+    
+    ## set sheet name
+    name_prefix <- "coef_trans"
+  }
+  
+  ## Multiply exposure training weights with exposure columns
+  data_eval[, names(wts)] <- sweep(data_eval[, names(wts), drop = FALSE], 2, wts, `*`)
+  
+  # Evaluate effect
+  ## pull formula from qgcomp
+  lhs <- as.character(object$fit$formula)[2]
+  rhs <- as.character(object$fit$formula)[3]
+  
+  ## Clean rhs string
+  rhs_clean <- gsub("[\n\r]", " ", rhs)       # Replace line breaks with space
+  rhs_clean <- gsub("\\s+", " ", rhs_clean) # Collapse multiple spaces
+  rhs_clean
+  
+  # ## Remove exposure terms: to avoid multicollinearity
+  # rhs_terms <- strsplit(rhs_clean, " \\+ ")[[1]]
+  # 
+  # rhs_new <- if (length(rhs_terms[!rhs_terms %in% exposure_names]) > 0) {
+  #   paste0(" + ", paste(rhs_terms[!rhs_terms %in% exposure_names], collapse = " + "))
+  # } else {
+  #   ""
+  # }
+  
+  formula_str <- paste0(lhs, "~", rhs_clean)
+  formula_str
+  
+  ## Model glm
+  # model_test <- lm(data = test_data,formula = formula_str, weights = (observation_wt_col))
+  model_mix <- eval(substitute(glm(formula = formula_str, family = "gaussian", data = data_eval, weights = W), list(W = as.name(observation_wt_col))))
+  model_mix
+  
+  # Create or load the workbook
+  wb <- createWorkbook()
+  
+  ## Get extension
+  name_suffix <- sub(".*(?:C[1-7]M|stringency)", "", exposure_names[1])
+  
+  ## Set digit format
+  options("openxlsx.numFmt" = "0.000")
+  
+  ## Tidy model output
+  regression_results <- broom::tidy(model_mix)
+  
+  ## Define sheet name
+  sheet_name <- paste0(name_prefix, name_suffix)
+  
+  ## Add sheet to workbook
+  addWorksheet(wb, sheet_name)
+  
+  ## Write the data to the sheet
+  writeData(wb, sheet = sheet_name, x = regression_results)
+  
+  ## Auto-adjust column widths
+  setColWidths(wb, sheet = sheet_name, cols = 1:ncol(regression_results), widths = "auto")
+  
+  # Return
+  ## return object
+  eval_object <- list()
+  eval_object$model <- model_mix
+  eval_object$new_data <- data_eval
+  eval_object$wb <- wb
+  eval_object$regression_results <- regression_results
+  
+  return(eval_object)
+  
+}
+
 
 # Function to check Heteroskedasticity and Intra-Class Correlation Coefficient ------------------
 qgcomp.hicc <- function(fit.object, 

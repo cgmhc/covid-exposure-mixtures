@@ -279,6 +279,34 @@ column_map = processed$column_map
 
 ```
 
+# Export column map: to add to main file
+
+```{r}
+# SAVE LOCALLY
+save(column_map, file = paste0(dir_data, "2d_column_map.RData"))
+
+# SAVE IN BUCKET
+destination_filename = paste0(dir_data, "2d_column_map.RData")
+
+########################################################################
+##
+################# DON'T CHANGE FROM HERE ###############################
+##
+########################################################################
+
+# Get the bucket name
+my_bucket = Sys.getenv('WORKSPACE_BUCKET')
+
+# Copy the file from current workspace to the bucket
+system(paste0("gsutil cp ", destination_filename, " ", my_bucket, "/data/"), intern=T)
+
+# Check if file is in the bucket
+system(paste0("gsutil ls ", my_bucket, "/data/*.RData"), intern=T)
+```
+
+
+
+
 # Combine with conditions
 ```{r}
 ## Combining cope_auo data with conditions_df

@@ -1,0 +1,1115 @@
+---
+title: "Modeling Test Sample Evaluation: Refit Eval"
+author: "Devon Watts, Pratik Nitin Khadse"
+date: "2025-05-23"
+output:
+  html_document:
+    toc: yes
+    toc_depth: 3
+    toc_float: yes
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Load packages
+
+```{r}
+# Note: In case of dependency issues, Run: update.packages(ask = FALSE, checkBuilt = TRUE)
+# install.packages('rlang')
+
+#' Ensure specified packages are installed and loaded.
+#'
+#' Checks if packages are installed, installs missing ones,
+#' then attempts to load all specified packages. Uses '=' for assignment.
+#'
+#' @param pkg_list A character vector of package names.
+#' @return Invisibly returns a named logical vector indicating load success for each package.
+load_packages = function(pkg_list) {
+  
+  # Ensure package list is unique
+  pkg_list = unique(pkg_list)
+  
+  # Identify installed packages
+  installed_pkgs = rownames(installed.packages())
+  
+  # Find packages that need installation
+  missing_pkgs = pkg_list[!pkg_list %in% installed_pkgs]
+  
+  # Install missing packages if any exist
+  if (length(missing_pkgs) > 0) {
+    message("Installing missing packages: ", paste(missing_pkgs, collapse = ", "))
+    tryCatch({
+      install.packages(missing_pkgs, dependencies = TRUE)
+      # Update the list of known installed packages *after* installation attempt
+      installed_pkgs = rownames(installed.packages()) 
+    }, error = function(e) {
+      warning("Installation failed for some packages: ", conditionMessage(e))
+    })
+  }
+  
+  message("Loading required packages...")
+  # Attempt to load all packages in the list
+  load_status = sapply(pkg_list, function(pkg) {
+    # Check if it's actually installed before trying to load
+    if (pkg %in% installed_pkgs) {
+      # Use require() as it returns TRUE/FALSE, suitable for sapply
+      # suppressPackageStartupMessages keeps the console cleaner
+      loaded = suppressPackageStartupMessages(
+        require(pkg, character.only = TRUE, quietly = TRUE)
+      )
+      if (!loaded) {
+        warning("Failed to load package: ", pkg)
+      }
+      return(loaded)
+    } else {
+      # If it's not in installed_pkgs (even after install attempt)
+      warning("Package '", pkg, "' not found or failed to install. Cannot load.")
+      return(FALSE)
+    }
+  })
+  
+  # Report final status
+  if (all(load_status)) {
+    message("All required packages loaded successfully.")
+  } else {
+    failed_pkgs = names(load_status[!load_status])
+    warning("Failed to load or install the following packages: ",
+            paste(failed_pkgs, collapse = ", "), ".")
+  }
+  
+  # Return the status invisibly (useful for checking programmatically if needed)
+  invisible(load_status)
+}
+
+
+# --- Usage ---
+
+# Define the list of required packages
+required_packages = c(
+  'tidyverse',    # Includes dplyr, ggplot2, purrr, tidyr, etc.
+  'haven',        # For reading SPSS, Stata, SAS files
+  'qgcomp',       # Quantile G-computation
+  'moments',      # Functions to calculate moments
+  'naniar',       # Data structures and visualizations for missing data
+  'VIM',          # Visualization and Imputation of Missing Values
+  'missForest',   # Nonparametric Missing Value Imputation using Random Forest
+  'gridExtra',    # Arrange multiple grid-based plots
+  'knitr',        # Dynamic report generation
+  'infotheo',     # Information-theoretic measures
+  'igraph',       # Network analysis tools
+  'ggraph',       # Grammar of graph visualization
+  'lubridate',    # Working with dates and times
+  'zoo',          # S3 Infrastructure for Regular and Irregular Time Series
+  'ggridges',     # Ridgeline plots
+  'slider',       # Sliding window functions
+  'reshape2',     # Flexibly reshape data
+  'broom',        # Convert statistical analysis objects into tidy data frames
+  'modelsummary', # Summarize models into tables/plots
+  'sandwich',     # Robust covariance matrix estimators
+  'arrow',        # Interface to Apache Arrow
+  'tidymodels',   # Used for train/test split 
+  'data.table',   # Enhanced structure for storing data 
+  'rsample',      # For split
+  'kableExtra',
+  'openxlsx'
+)
+
+# Run the function to install (if needed) and load the packages
+load_packages(required_packages)
+```
+
+```{r}
+# Source functions
+source(here::here("2d-qgcomp-custom.R"))
+
+# Directory paths
+dir_data <- here::here(paste0("02-modeling/data/"))
+dir_tables <- here::here(paste0("02-modeling/tables/"))
+```
+
+# Load data
+
+```{r}
+# Load excel
+wb <- loadWorkbook(paste0(dir_tables, "qgcomp_regression_results_4.xlsx"))
+```
+
+```{r}
+# Source from bucket
+# This code copies a file from your Google Bucket into a dataframe
+
+# replace 'test.csv' with the name of the file in your google bucket (don't delete the quotation marks)
+name_of_file_in_bucket =  paste0("2d_model_objects", ".RData")
+
+########################################################################
+##
+################# DON'T CHANGE FROM HERE ###############################
+##
+########################################################################
+
+# Get the bucket name
+my_bucket = Sys.getenv('WORKSPACE_BUCKET')
+
+# Copy the file from current workspace to the bucket
+system(paste0("gsutil cp ", my_bucket, "/data/", name_of_file_in_bucket, " ."), intern=T)
+
+# Load the file into a dataframe
+load(name_of_file_in_bucket)
+
+if(FALSE){
+# Source locally
+load(file = paste0(dir_data, "2d_model_objects", ".RData"))
+}
+```
+
+
+
+# Loop for Modeling
+
+
+
+```{r}
+# Initialize windows
+period_keys <- c("20200315_20200627", "20200322_20200523", "20200412_20200523")
+suffixes <-c("_March_15_June_27", "_March_22_May_23", "_April_12_May_23")
+stringency_keys <- c("march_15_june_30", "march_22_may_23", "april_12_may_23")
+
+# # For trial check. Uncomment if you want to check
+# period_keys <- c("20200315_20200627")
+# suffixes <-c("_March_15_June_27")
+# stringency_keys <- c("march_15_june_30")
+# i = 1
+
+results_est_list <- list()
+results_hicc_list <- list()
+
+
+for (i in seq_along(period_keys)) {
+  
+  
+  # Get train, test and full sample data
+  assign("train_data_df", get(paste0("train_data_df", tolower(suffixes[i]))))
+  assign("test_data_df", get(paste0("test_data_df", tolower(suffixes[i]))))
+  assign("cope_auo_july_no_miss_w_stringency", get(paste0("cope_auo_july_no_miss_w_stringency", tolower(suffixes[i]))))
+  
+
+  # Weights
+  qgcomp_weights_train = train_data_df$observation_wt_trim 
+  qgcomp_weights_test  = test_data_df$observation_wt_trim 
+  qgcomp_weights_total_sample = cope_auo_july_no_miss_w_stringency$observation_wt_trim
+  
+  # All components model to estimate pos and neg components ---------------------------------
+  ## get formula
+  static_covariates <- c("age_2020",
+                         "home",
+                         "maritalstatus",
+                         "race",
+                         "education",
+                         "employment",
+                         "insurance",
+                         "anxiety_disorder_before_covid_lifetime",
+                         "anxiety_disorder_1yr_before_covid",
+                         "sex",
+                         "birthplace",
+                         "generalized_anxiety_disorder_before_covid_lifetime",
+                         "generalized_anxiety_disorder_1yr_before_covid")
+  
+  dynamic_covariates <- c(paste0("C1M", suffixes[i]),
+    paste0("C2M", suffixes[i]),
+    paste0("C3M", suffixes[i]),
+    paste0("C4M", suffixes[i]),
+    paste0("C5M", suffixes[i]),
+    paste0("C6M", suffixes[i]),
+    paste0("C7M", suffixes[i]))
+  
+  exposure_names <- c(paste0("C1M", suffixes[i]),
+    paste0("C2M", suffixes[i]),
+    paste0("C3M", suffixes[i]),
+    paste0("C4M", suffixes[i]),
+    paste0("C5M", suffixes[i]),
+    paste0("C6M", suffixes[i]),
+    paste0("C7M", suffixes[i]))
+  
+  full_covariates <- c(static_covariates, dynamic_covariates)
+  fml <- as.formula(paste("gad_score_july ~", paste(full_covariates, collapse = " + ")))
+  
+  qgcomp_all_components = qgcomp.glm.noboot(f = fml,
+                                          expnms = exposure_names, 
+                                          data = train_data_df, 
+                                          weights = qgcomp_weights_train,
+                                          q = NULL,
+                                          bayes = FALSE) 
+
+  print(paste0("All components initial results:- \n"))
+  print(qgcomp_all_components)
+  
+  # Extract components
+  ## all components
+  all_list <- sub(pattern = paste0(suffixes[i], "$"), 
+                  replacement = "", 
+                  x = qgcomp_all_components$expnms)
+  
+  ## pos components
+  pos_list <- sub(pattern = paste0(suffixes[i], "$"), 
+                  replacement = "", 
+                  x = names(qgcomp_all_components$pos.weights))
+  
+  ## neg components
+  neg_list <- sub(pattern = paste0(suffixes[i], "$"), 
+                  replacement = "", 
+                  x = names(qgcomp_all_components$neg.weights))
+  
+  ## Print components
+  print(cat(" -------------- All Components (", sub("^_", "", suffixes[i]), ") :- --------------------\n", 
+            paste(all_list, collapse = "\n")))
+  print(cat(" -------------- Positive Components (", sub("^_", "", suffixes[i]), ") :- --------------------\n", 
+            paste(pos_list, collapse = "\n")))
+  print(cat(" -------------- Negative Components (", sub("^_", "", suffixes[i]), ") :- --------------------\n", 
+            paste(neg_list, collapse = "\n")))
+  
+  ## Final exposure list
+  exposure_list <- list(c("C1M"), 
+                       c("C2M"),
+                       c("C3M"),
+                       c("C4M"),
+                       c("C5M"),
+                       c("C6M"),
+                       c("C7M"),
+                       all_list,
+                       pos_list,
+                       neg_list,
+                       c("Stringency")
+                       )
+  
+  # Init results df
+  result_est_df <- data.frame()
+  result_hicc_df <- data.frame()
+  
+  # Loop over exposures
+  
+  # # For check. Uncomment if you want to check
+  # exp = c(all_list)
+  
+  for(exp in exposure_list){
+    
+    # Define variables
+    static_covariates <- c("age_2020",
+                           "home",
+                           "maritalstatus",
+                           "race",
+                           "education",
+                           "employment",
+                           "insurance",
+                           "anxiety_disorder_before_covid_lifetime",
+                           "anxiety_disorder_1yr_before_covid",
+                           "sex",
+                           "birthplace",
+                           "generalized_anxiety_disorder_before_covid_lifetime",
+                           "generalized_anxiety_disorder_1yr_before_covid")
+    
+    # Init consolidation setting
+    consolidation_set = FALSE
+    
+    # Get formula
+    exp_vals <- if (is.character(exp) && length(exp) == 1 && exists(exp)) get(exp) else exp
+    
+    if(length(exp_vals) == 1){
+      if(!exp_vals %in% c("Stringency")){
+        print(paste0("Processing for ", exp_vals))
+        
+        dynamic_covariates <- c(paste0(exp_vals, suffixes[i]))
+        exposure_names <- c(paste0(exp_vals, suffixes[i]))
+        exposures_to_extract <- c(paste0(exp_vals, suffixes[i]))
+        full_covariates <- c(static_covariates, dynamic_covariates)
+        fml <- as.formula(paste("gad_score_july ~", paste(full_covariates, collapse = " + ")))
+        consolidation_set = FALSE
+      
+      } else {
+        print(paste0("Processing for ", exp_vals))
+      
+        dynamic_covariates <- c(paste0("stringency", "_", stringency_keys[i]))
+        exposure_names <- c(paste0("stringency", "_", stringency_keys[i]))
+        exposures_to_extract <- c(paste0("stringency", "_",  stringency_keys[i]))
+        full_covariates <- c(static_covariates, dynamic_covariates)
+        fml <- as.formula(paste("gad_score_july ~", paste(full_covariates, collapse = " + ")))
+        consolidation_set = FALSE
+      }
+    } else {
+      consolidation_set = TRUE
+      if (setequal(exp_vals, all_list)) {
+        consolidation_name <- "all_components"
+      } else if (setequal(exp_vals, pos_list)) {
+        consolidation_name <- "pos_components"
+      } else if (setequal(exp_vals, neg_list)) {
+        consolidation_name <- "neg_components"
+      }
+      
+      print(paste0("Processing for ", consolidation_name))
+      dynamic_covariates <- c(paste0(all_list, suffixes[i]))
+      exposure_names <- c(paste0(all_list, suffixes[i]))
+      exposures_to_extract <- c(paste0(exp_vals, suffixes[i]))
+      full_covariates <- c(static_covariates, dynamic_covariates)
+      fml <- as.formula(paste("gad_score_july ~", paste(full_covariates, collapse = " + ")))
+      
+    }
+    
+    # Fit model
+    model_qgcomp <- qgcomp.glm.noboot(f = fml,
+                                        expnms = exposure_names, 
+                                        data = train_data_df, 
+                                        weights = qgcomp_weights_train,
+                                        q = NULL,
+                                        bayes = FALSE) 
+    
+    # Evaluate mixture score on test data
+    test_set_eval <-  qgcomp.model.mixture(object = model_qgcomp,
+                                           data_eval = test_data_df,
+                                           observation_wt_col= c("observation_wt_trim"),
+                                           exposure_names = exposures_to_extract,
+                                           norm_wt = FALSE)
+
+    
+    model_test <- test_set_eval$model
+    test_data_new <- test_set_eval$new_data
+    
+   
+    
+    if(TRUE){
+    new_wb <- test_set_eval$wb
+    new_reg_results <- test_set_eval$regression_results
+    
+    # Add excel sheet
+    if(consolidation_set){
+      
+      ## Get sheet names
+      new_sheet_names <- names(new_wb)
+      
+      ## Loop over sheet indices
+      for (j in seq_along(new_sheet_names)) {
+        sheet_data <- readWorkbook(new_wb, sheet = new_sheet_names[j])
+        
+        ## Define new sheet name
+        new_sheet_name <- paste0("c_", stringr::str_sub(consolidation_name, 1, 8), suffixes[i])
+        print(new_sheet_name)
+        
+        ## Add a new sheet to old_wb with the new name and write the data
+        addWorksheet(wb, new_sheet_name)
+        writeData(wb, sheet = new_sheet_name, x = sheet_data)
+        
+        ## Auto-adjust column widths
+        setColWidths(wb, sheet = new_sheet_name, cols = 1:ncol(new_reg_results), widths = "auto")
+        
+        ## Identify relevant columns
+        pval_col <- which(names(new_reg_results) == "p.value")
+        est_col  <- which(names(new_reg_results) == "estimate")
+        
+        ## Apply conditional formatting for p val
+        if (!is.na(pval_col) && length(pval_col) > 0) {
+          conditionalFormatting(
+            wb, sheet = new_sheet_name,
+            cols = pval_col,
+            rows = 2:(nrow(new_reg_results) + 1),  # +1 for header
+            rule = "<0.05",
+            style = createStyle(fontColour = "black", bgFill = "#63BE7B")
+          )
+        }
+        
+        
+        ## Apply conditional formatting for estimates
+        if (!is.na(est_col) && length(est_col) > 0) {
+          conditionalFormatting(
+            wb, sheet = new_sheet_name,
+            cols = est_col,
+            rows = 2:(nrow(new_reg_results) + 1),
+            type = "colourScale",
+            style = c("#F8696B", "#FFFFFF", "#63BE7B")  # red-white-green scale
+          )
+        }
+        
+        ## Apply formatting for mixture_score
+        mix_row_index <- which(new_reg_results$term == "mixture_score")
+        
+        if (length(mix_row_index) > 0) {
+          highlight_style <- createStyle(fgFill = "#FFFF00")
+        
+          addStyle(
+            wb, sheet = new_sheet_name,
+            style = highlight_style,
+            rows = mix_row_index + 1,  # +1 for header row
+            cols = 1:ncol(new_reg_results),
+            gridExpand = TRUE,
+            stack = TRUE
+          )
+        }
+        
+          # Visualization
+          mix_dist_plot <- ggplot(test_data_new, aes(x = mixture_score)) +
+            geom_histogram(aes(y = ..density..), bins = 30, fill = "skyblue", alpha = 0.6, color = "black") +
+            geom_density(color = "darkblue", size = 1) +
+            labs(title = "Distribution of mixture_score",
+                 x = "mixture_score", y = "Density") +
+            theme_minimal()
+          plot_file <- tempfile(fileext = ".png")
+          ggsave(plot_file, plot = mix_dist_plot, width = 6, height = 4, dpi = 300, bg = "white")
+          
+          ## Add image
+          insertImage(wb, sheet = new_sheet_name, file = plot_file,
+            width = 6, height = 4,
+            startRow = 1,  # top-aligned
+            startCol = ncol(new_reg_results) + 3)
+        
+      }
+    }
+    }
+    
+    # Add weights before transfer
+    # Add mixture distribution for states, maybe subplot later. chloropleth map for viz at later stages
+    
+    
+    # Get HICC estimates
+    ## Extract
+    hicc_df <- qgcomp.hicc(fit.object =  model_test,
+                           data = test_data_new,
+                           cluster_col = "RegionName")
+    if(!consolidation_set){
+      hicc_df <- cbind(components = sub(pattern = suffixes[i], 
+                                replacement = "", 
+                                x = exposure_names),
+                       hicc_df)
+    } else {
+      hicc_df <- cbind(components = consolidation_name,
+                       hicc_df)
+    }
+    
+    ## Add to df
+    result_hicc_df <- rbind(result_hicc_df, hicc_df)
+    
+    # Get robust estimates
+    ## Extract
+    robust_df <- qgcomp.robust.est(fit.object = model_test,
+                               cluster_robust = TRUE, 
+                               robust_type = "HC1", 
+                               cluster_var = test_data_new$RegionName, 
+                               exposure_names = "mixture_score")
+    
+    if(!consolidation_set){
+      robust_df <- cbind(components = sub(pattern = suffixes[i], 
+                                replacement = "", 
+                                x = exposure_names), 
+                         robust_df)
+    } else {
+      robust_df <- cbind(components = consolidation_name, 
+                         robust_df)
+    }
+    
+    ## Add to df
+    result_est_df <- rbind(result_est_df, robust_df)
+    
+  }
+  
+  ## Add column for window
+  result_est_df <- cbind(exposure_window = sub("^_", "", suffixes[i]),
+                         result_est_df)
+  result_hicc_df <- cbind(exposure_window = sub("^_", "", suffixes[i]),
+                         result_hicc_df)
+  
+  ## Add to main result list
+  results_est_list[[sub("^_", "", suffixes[i])]] <- result_est_df
+  results_hicc_list[[sub("^_", "", suffixes[i])]] <- result_hicc_df
+  
+}
+
+## View results
+results_est_list
+results_hicc_list
+```
+
+
+
+```{r}
+# Create kable view
+
+## Store all results
+all_results <- rbindlist(results_est_list)
+
+## Clean stringency values
+all_results$components <- ifelse(grepl("^stringency_", all_results$components),
+                     sub("_.*", "_index", all_results$components),
+                     all_results$components)
+
+## Add ci column
+all_results <- all_results %>%
+  mutate(ci = paste0("(", 
+                     scales::number(lower_ci, accuracy = 0.001), 
+                     ", ", 
+                     scales::number(upper_ci, accuracy = 0.001), 
+                     ")")
+         )
+
+## View
+all_results
+
+## Create list of data frames for each window
+window_dfs <- lapply(unique(all_results$exposure_window), function(window) {
+  all_results %>%
+    filter(exposure_window == window) %>%
+    select(components, beta, ci, p_val) %>%
+    rename_with(~ paste0(., "_window_", window), -components)
+})
+
+
+## Combine side by side 
+final_df <- reduce(window_dfs, left_join, by = c("components"))
+
+## Get p-value columns
+pval_cols <- grep("^p_val_", names(final_df), value = TRUE)
+
+## Apply bolding to those columns
+final_df_bold <- final_df
+
+for (col in pval_cols) {
+  final_df_bold[[col]] <- cell_spec(
+    sprintf("%.3f", final_df[[col]]),  # format to 3 decimal places
+    format = "html",
+    bold = final_df[[col]] < 0.05
+  )
+}
+
+## Save as kable
+result_df_kable <- final_df_bold %>%
+  knitr::kable(digits = 3, 
+               booktabs = TRUE, 
+               format = "html", 
+               escape = FALSE,
+               caption =  paste0("Quantile gcomp test sample results: refit eval")) %>%
+  kable_styling(font_size = 15, fixed_thead = TRUE, bootstrap_options = c("striped", "hover"))
+
+print(result_df_kable)
+```
+
+```{r}
+# Create kable for hicc
+
+final_df <- rbindlist(results_hicc_list)
+
+result_hicc_kable <- final_df %>%
+  knitr::kable(digits = 3, 
+               booktabs = TRUE, 
+               format = "html", 
+               escape = FALSE,
+               caption = paste0("Quantile gcomp test sample hicc: refit eval")) %>%
+  kable_styling(font_size = 15, fixed_thead = TRUE, bootstrap_options = c("striped", "hover"))
+
+print(result_hicc_kable)
+```
+
+
+# Export
+
+```{r}
+# Save locally
+save_kable(result_df_kable, paste0(dir_tables, "qgcomp_test_sample_results_refit_eval_coeff.html"))
+save_kable(result_hicc_kable, paste0(dir_tables, "qgcomp_test_sample_hicc_refit_eval_coeff.html"))
+
+# SAVE IN BUCKET: RESULT
+
+file_to_save <- copy(result_df_kable)
+
+# Replace with THE NAME of the file you're going to store in the bucket (don't delete the quotation marks)
+destination_filename = paste0(dir_tables, "qgcomp_test_sample_results_refit_eval_coeff.html")
+
+########################################################################
+##
+################# DON'T CHANGE FROM HERE ###############################
+##
+########################################################################
+
+# store the dataframe in current workspace
+save_kable(file_to_save, destination_filename)
+
+# Get the bucket name
+my_bucket = Sys.getenv('WORKSPACE_BUCKET')
+
+# Copy the file from current workspace to the bucket
+system(paste0("gsutil cp ", destination_filename, " ", my_bucket, "/data/"), intern=T)
+
+# Check if file is in the bucket
+system(paste0("gsutil ls ", my_bucket, "/data/*.html"), intern=T)
+
+# SAVE IN BUCKET: HICC
+
+file_to_save <- copy(result_hicc_kable)
+
+# Replace with THE NAME of the file you're going to store in the bucket (don't delete the quotation marks)
+destination_filename = paste0(dir_tables, "qgcomp_test_sample_hicc_refit_eval_coeff.html")
+
+########################################################################
+##
+################# DON'T CHANGE FROM HERE ###############################
+##
+########################################################################
+
+# store the dataframe in current workspace
+save_kable(file_to_save, destination_filename)
+
+# Get the bucket name
+my_bucket = Sys.getenv('WORKSPACE_BUCKET')
+
+# Copy the file from current workspace to the bucket
+system(paste0("gsutil cp ", destination_filename, " ", my_bucket, "/data/"), intern=T)
+
+# Check if file is in the bucket
+system(paste0("gsutil ls ", my_bucket, "/data/*.html"), intern=T)
+
+# SAVE IN BUCKET: REGRESSION RESULTS
+file_to_save <- copy(wb)
+
+# Replace with THE NAME of the file you're going to store in the bucket (don't delete the quotation marks)
+destination_filename = paste0(dir_tables, "qgcomp_regression_results_5.xlsx")
+
+########################################################################
+##
+################# DON'T CHANGE FROM HERE ###############################
+##
+########################################################################
+
+# store the dataframe in current workspace
+saveWorkbook(file_to_save, destination_filename, overwrite = TRUE)
+
+# Get the bucket name
+my_bucket = Sys.getenv('WORKSPACE_BUCKET')
+
+# Copy the file from current workspace to the bucket
+system(paste0("gsutil cp ", destination_filename, " ", my_bucket, "/data/"), intern=T)
+
+# Check if file is in the bucket
+system(paste0("gsutil ls ", my_bucket, "/data/*.xlsx"), intern=T)
+
+```
+
+# Loop for Age Stratified Modeling
+
+
+```{r}
+# Initialize windows
+period_keys <- c("20200315_20200627", "20200322_20200523", "20200412_20200523")
+suffixes <-c("_March_15_June_27", "_March_22_May_23", "_April_12_May_23")
+stringency_keys <- c("march_15_june_30", "march_22_may_23", "april_12_may_23")
+
+# # For trial check . Uncomment if you want to check
+# period_keys <- c("20200315_20200627")
+# suffixes <-c("_March_15_June_27")
+# stringency_keys <- c("march_15_june_30")
+# i = 1
+
+results_est_list <- list()
+results_hicc_list <- list()
+
+
+for (i in seq_along(period_keys)) {
+  
+  
+  # Get train, test and full sample data
+  assign("train_data_df", get(paste0("train_data_df", tolower(suffixes[i]))))
+  assign("test_data_df", get(paste0("test_data_df", tolower(suffixes[i]))))
+  assign("cope_auo_july_no_miss_w_stringency", get(paste0("cope_auo_july_no_miss_w_stringency", tolower(suffixes[i]))))
+  
+
+  # Weights
+  qgcomp_weights_train = train_data_df$observation_wt_trim 
+  qgcomp_weights_test  = test_data_df$observation_wt_trim 
+  qgcomp_weights_total_sample = cope_auo_july_no_miss_w_stringency$observation_wt_trim
+  
+  # Init age list
+  results_est_age_list <- list()
+  results_hicc_age_list <- list()
+  
+  for (group in levels(train_data_df$age_group)){
+    print(paste0("Processing for age group: ", group))
+    
+    # Get analysis data
+    analysis_data = train_data_df %>% filter(age_group == group)
+    analysis_data_test = test_data_df %>% filter(age_group == group)
+    qgcomp_weights_analysis = analysis_data$observation_wt_trim
+    
+     # All components model to estimate pos and neg components ---------------------------------
+    ## get formula
+    static_covariates <- c("age_2020",
+                           "home",
+                           "maritalstatus",
+                           "race",
+                           "education",
+                           "employment",
+                           "insurance",
+                           "anxiety_disorder_before_covid_lifetime",
+                           "anxiety_disorder_1yr_before_covid",
+                           "sex",
+                           "birthplace",
+                           "generalized_anxiety_disorder_before_covid_lifetime",
+                           "generalized_anxiety_disorder_1yr_before_covid")
+    
+    dynamic_covariates <- c(paste0("C1M", suffixes[i]),
+      paste0("C2M", suffixes[i]),
+      paste0("C3M", suffixes[i]),
+      paste0("C4M", suffixes[i]),
+      paste0("C5M", suffixes[i]),
+      paste0("C6M", suffixes[i]),
+      paste0("C7M", suffixes[i]))
+  
+    exposure_names <- c(paste0("C1M", suffixes[i]),
+      paste0("C2M", suffixes[i]),
+      paste0("C3M", suffixes[i]),
+      paste0("C4M", suffixes[i]),
+      paste0("C5M", suffixes[i]),
+      paste0("C6M", suffixes[i]),
+      paste0("C7M", suffixes[i]))
+    
+    full_covariates <- c(static_covariates, dynamic_covariates)
+    fml <- as.formula(paste("gad_score_july ~", paste(full_covariates, collapse = " + ")))
+    
+    qgcomp_all_components = qgcomp.glm.noboot(f = fml,
+                                            expnms = exposure_names,
+                                            data = analysis_data,
+                                            weights = qgcomp_weights_analysis,
+                                            q = NULL,
+                                            bayes = FALSE)
+  
+    print(paste0("All components initial results:- \n"))
+    print(qgcomp_all_components)
+    
+    # Extract components
+    ## all components
+    all_list <- sub(pattern = paste0(suffixes[i], "$"), 
+                    replacement = "", 
+                    x = qgcomp_all_components$expnms)
+    
+    ## pos components
+    pos_list <- sub(pattern = paste0(suffixes[i], "$"), 
+                    replacement = "", 
+                    x = names(qgcomp_all_components$pos.weights))
+    
+    ## neg components
+    neg_list <- sub(pattern = paste0(suffixes[i], "$"), 
+                    replacement = "", 
+                    x = names(qgcomp_all_components$neg.weights))
+    
+    ## Print components
+    print(cat(" -------------- All Components (", sub("^_", "", suffixes[i]), ") :- --------------------\n", 
+              paste(all_list, collapse = ", \n")))
+    print(cat(" -------------- Positive Components (", sub("^_", "", suffixes[i]), ") :- --------------------\n", 
+              paste(pos_list, collapse = ", \n")))
+    print(cat(" -------------- Negative Components (", sub("^_", "", suffixes[i]), ") :- --------------------\n", 
+              paste(neg_list, collapse = ", \n")))
+    
+    ## Final exposure list
+    exposure_list <- list(c("C1M"), 
+                       c("C2M"),
+                       c("C3M"),
+                       c("C4M"),
+                       c("C5M"),
+                       c("C6M"),
+                       c("C7M"),
+                       all_list,
+                       pos_list,
+                       neg_list,
+                       c("Stringency")
+                       )
+    
+    # Init results df
+    result_est_age_df <- data.frame()
+    result_hicc_age_df <- data.frame()
+    
+    for(exp in exposure_list){
+    
+      # Define variables
+      static_covariates <- c("age_2020",
+                             "home",
+                             "maritalstatus",
+                             "race",
+                             "education",
+                             "employment",
+                             "insurance",
+                             "anxiety_disorder_before_covid_lifetime",
+                             "anxiety_disorder_1yr_before_covid",
+                             "sex",
+                             "birthplace",
+                             "generalized_anxiety_disorder_before_covid_lifetime",
+                             "generalized_anxiety_disorder_1yr_before_covid")
+      
+      # Init consolidation setting
+      consolidation_set = FALSE
+      
+      # Get formula
+      exp_vals <- if (is.character(exp) && length(exp) == 1 && exists(exp)) get(exp) else exp
+      
+      if(length(exp_vals) == 1){
+        if(!exp_vals %in% c("Stringency")){
+          print(paste0("Processing for ", exp_vals))
+          
+          dynamic_covariates <- c(paste0(exp_vals, suffixes[i]))
+          exposure_names <- c(paste0(exp_vals, suffixes[i]))
+          full_covariates <- c(static_covariates, dynamic_covariates)
+          fml <- as.formula(paste("gad_score_july ~", paste(full_covariates, collapse = " + ")))
+        
+        } else {
+          print(paste0("Processing for ", exp_vals))
+        
+          dynamic_covariates <- c(paste0("stringency", "_", stringency_keys[i]))
+          exposure_names <- c(paste0("stringency", "_", stringency_keys[i]))
+          full_covariates <- c(static_covariates, dynamic_covariates)
+          fml <- as.formula(paste("gad_score_july ~", paste(full_covariates, collapse = " + ")))
+        }
+      } else {
+        consolidation_set = TRUE
+        if (setequal(exp_vals, all_list)) {
+          consolidation_name <- "all_components"
+        } else if (setequal(exp_vals, pos_list)) {
+          consolidation_name <- "pos_components"
+        } else if (setequal(exp_vals, neg_list)) {
+          consolidation_name <- "neg_components"
+        }
+        
+        print(paste0("Processing for ", consolidation_name))
+        dynamic_covariates <- c(paste0(exp_vals, suffixes[i]))
+        exposure_names <- c(paste0(exp_vals, suffixes[i]))
+        full_covariates <- c(static_covariates, dynamic_covariates)
+        fml <- as.formula(paste("gad_score_july ~", paste(full_covariates, collapse = " + ")))
+        
+      }
+      
+      # Fit model
+      model_qgcomp <- qgcomp.glm.noboot(f = fml,
+                                          expnms = exposure_names, 
+                                          data = analysis_data, 
+                                          weights = qgcomp_weights_analysis,
+                                          q = NULL,
+                                          bayes = FALSE)
+      
+      # Evaluate mixture score on test data
+      test_set_eval <-  qgcomp.model.mixture(object = model_qgcomp,
+                                             data_eval = analysis_data_test,
+                                             observation_wt_col= c("observation_wt_trim"),
+                                             exposure_names = exposure_names)
+  
+    
+      model_test <- test_set_eval$model
+      test_data_new <- test_set_eval$new_data
+      
+      # Get HICC estimates
+      ## Extract
+      hicc_df <- qgcomp.hicc(fit.object =  model_test,
+                             data = test_data_new,
+                             cluster_col = "RegionName")
+      if(!consolidation_set){
+        hicc_df <- cbind(components = sub(pattern = suffixes[i], 
+                                  replacement = "", 
+                                  x = exposure_names),
+                         hicc_df)
+      } else {
+        hicc_df <- cbind(components = consolidation_name,
+                         hicc_df)
+      }
+      
+      ## Add to df
+      result_hicc_age_df <- rbind(result_hicc_age_df, hicc_df)
+      
+      # Get robust estimates
+      ## Extract
+      robust_df <- qgcomp.robust.est(fit.object = model_test,
+                                 cluster_robust = TRUE, 
+                                 robust_type = "HC1", 
+                                 cluster_var = analysis_data_test$RegionName, 
+                                 exposure_names = "mixture_score")
+      
+      if(!consolidation_set){
+        robust_df <- cbind(components = sub(pattern = suffixes[i], 
+                                  replacement = "", 
+                                  x = exposure_names), 
+                           robust_df)
+      } else {
+        robust_df <- cbind(components = consolidation_name, 
+                           robust_df)
+      }
+      
+      ## Add to df
+      result_est_age_df <- rbind(result_est_age_df, robust_df)
+      
+  }
+  
+  ## Add column for window
+  result_est_age_df <- cbind(age_group = group,
+                         result_est_age_df)
+  result_hicc_age_df <- cbind(age_group = group,
+                         result_hicc_age_df)
+  
+  ## Add to age result list
+  results_est_age_list[[group]] <- result_est_age_df
+  results_hicc_age_list[[group]] <- result_hicc_age_df
+    
+  }
+  
+  # Consolidate age dfs
+  ## Curate df for hicc
+  all_age_hicc <- rbindlist(results_hicc_age_list)
+  all_age_hicc <- cbind(exposure_window = sub("^_", "", suffixes[i]),
+                         all_age_hicc)
+  
+  ## Curate df for est
+  all_age_results <- rbindlist(results_est_age_list)
+  
+  
+  ### Clean stringency values
+  all_age_results$components <- ifelse(grepl("^stringency_", all_age_results$components),
+                       sub("_.*", "_index", all_age_results$components),
+                       all_age_results$components)
+  
+  ### Add ci column
+  all_age_results <- all_age_results %>%
+    mutate(ci = paste0("(", 
+                       scales::number(lower_ci, accuracy = 0.001), 
+                       ", ", 
+                       scales::number(upper_ci, accuracy = 0.001), 
+                       ")")
+           )
+  
+  ### Create list of data frames for each window
+  age_dfs <- lapply(unique(all_age_results$age_group), function(group) {
+    all_age_results %>%
+      filter(age_group == group) %>%
+      select(components, beta, ci, p_val) %>%
+      rename_with(~ paste0(., "_age_", group), -components)
+  })
+
+
+
+  ### Combine side by side 
+  final_age_df <- reduce(age_dfs, left_join, by = c("components"))
+  colnames(final_age_df) <- gsub("-", "_", colnames(final_age_df))
+  
+  ## Add to main result list
+  results_est_list[[sub("^_", "", suffixes[i])]] <- final_age_df
+  results_hicc_list[[sub("^_", "", suffixes[i])]] <- all_age_hicc
+    
+}
+
+results_est_list <- imap(results_est_list, function(df, name) {
+  cols_to_rename <- setdiff(names(df), "components")
+  names(df)[names(df) %in% cols_to_rename] <- paste0(cols_to_rename, "_", name)
+  df
+})
+
+## View
+results_est_list
+results_hicc_list
+```
+
+```{r}
+# Save kable
+
+## Get final df
+final_df <- reduce(results_est_list, left_join, by = "components")
+
+## Get p-value columns
+pval_cols <- grep("^p_val_", names(final_df), value = TRUE)
+
+## Apply bolding to those columns
+final_df_bold <- final_df
+
+for (col in pval_cols) {
+  final_df_bold[[col]] <- cell_spec(
+    sprintf("%.3f", final_df[[col]]),  # format to 3 decimal places
+    format = "html",
+    bold = final_df[[col]] < 0.05
+  )
+}
+
+## Save as kable
+result_df_kable <- final_df_bold %>%
+  knitr::kable(digits = 3, 
+               booktabs = TRUE, 
+               format = "html", 
+               escape = FALSE,
+               caption = paste0("Quantile gcomp test sample age stratified results: refit eval")) %>%
+  kable_styling(font_size = 15, fixed_thead = TRUE, bootstrap_options = c("striped", "hover"))
+
+print(result_df_kable)
+```
+
+```{r}
+# Create kable for hicc
+
+final_df <- rbindlist(results_hicc_list)
+
+result_hicc_kable <- final_df %>%
+  knitr::kable(digits = 3, 
+               booktabs = TRUE, 
+               format = "html", 
+               escape = FALSE,
+               caption = paste0("Quantile gcomp test sample age stratified hicc: refit eval")) %>%
+  kable_styling(font_size = 15, fixed_thead = TRUE, bootstrap_options = c("striped", "hover"))
+
+print(result_hicc_kable)
+```
+
+# Export
+
+```{r}
+# Save locally
+save_kable(result_df_kable, paste0(dir_tables, "qgcomp_test_sample_age_strat_results_refit_eval.html"))
+save_kable(result_hicc_kable, paste0(dir_tables, "qgcomp_test_sample_age_strat_hicc_refit_eval.html"))
+
+# SAVE IN BUCKET: RESULT
+
+file_to_save <- copy(result_df_kable)
+
+# Replace with THE NAME of the file you're going to store in the bucket (don't delete the quotation marks)
+destination_filename = paste0(dir_tables, "qgcomp_test_sample_age_strat_results_refit_eval.html")
+
+########################################################################
+##
+################# DON'T CHANGE FROM HERE ###############################
+##
+########################################################################
+
+# store the dataframe in current workspace
+save_kable(file_to_save, destination_filename)
+
+# Get the bucket name
+my_bucket = Sys.getenv('WORKSPACE_BUCKET')
+
+# Copy the file from current workspace to the bucket
+system(paste0("gsutil cp ", destination_filename, " ", my_bucket, "/data/"), intern=T)
+
+# Check if file is in the bucket
+system(paste0("gsutil ls ", my_bucket, "/data/*.html"), intern=T)
+
+
+# SAVE IN BUCKET: HICC
+
+file_to_save <- copy(result_hicc_kable)
+
+# Replace with THE NAME of the file you're going to store in the bucket (don't delete the quotation marks)
+destination_filename = paste0(dir_tables, "qgcomp_test_sample_age_strat_hicc_refit_eval.html")
+
+########################################################################
+##
+################# DON'T CHANGE FROM HERE ###############################
+##
+########################################################################
+
+# store the dataframe in current workspace
+save_kable(file_to_save, destination_filename)
+
+# Get the bucket name
+my_bucket = Sys.getenv('WORKSPACE_BUCKET')
+
+# Copy the file from current workspace to the bucket
+system(paste0("gsutil cp ", destination_filename, " ", my_bucket, "/data/"), intern=T)
+
+# Check if file is in the bucket
+system(paste0("gsutil ls ", my_bucket, "/data/*.html"), intern=T)
+```

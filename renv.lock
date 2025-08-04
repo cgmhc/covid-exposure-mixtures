@@ -493,14 +493,14 @@
     },
     "data.table": {
       "Package": "data.table",
-      "Version": "1.17.4",
+      "Version": "1.17.6",
       "Source": "Repository",
       "Repository": "CRAN",
       "Requirements": [
         "R",
         "methods"
       ],
-      "Hash": "70da4288a2c210772673d98f767e763d"
+      "Hash": "9ac198420cc2aa0327a0c62cfa16b580"
     },
     "datawizard": {
       "Package": "datawizard",

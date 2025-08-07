@@ -25,7 +25,7 @@ qgcomp.model.mixture <- function(object,
   
   if(norm_wt){
     ## Extract weights
-    wts <- c(object$pos.weights, object$neg.weights)
+    wts <- c(object$pos.weights, object$neg.weights)[exposure_names]
     
     ## set sheet name
     name_prefix <- "wt_trans"
@@ -59,8 +59,11 @@ qgcomp.model.mixture <- function(object,
   ## Remove exposure terms: to avoid multicollinearity
   rhs_terms <- strsplit(rhs_clean, " \\+ ")[[1]]
   
-  rhs_new <- if (length(rhs_terms[!rhs_terms %in% exposure_names]) > 0) {
-    paste0(" + ", paste(rhs_terms[!rhs_terms %in% exposure_names], collapse = " + "))
+  ## Get exposure terms
+  exposure_terms <- grep("^C[1-7]M", rhs_terms, value = TRUE)
+  
+  rhs_new <- if (length(rhs_terms[!rhs_terms %in% exposure_terms]) > 0) {
+    paste0(" + ", paste(rhs_terms[!rhs_terms %in% exposure_terms], collapse = " + "))
   } else {
     ""
   }

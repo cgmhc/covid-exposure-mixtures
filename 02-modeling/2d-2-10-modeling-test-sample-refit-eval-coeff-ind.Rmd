@@ -1,5 +1,5 @@
 ---
-title: "Modeling Test Sample Evaluation: Refit Eval"
+title: "Modeling Test Sample Evaluation: Refit Eval Coefficient Transfer (Individual Comp)"
 author: "Devon Watts, Pratik Nitin Khadse"
 date: "2025-05-23"
 output:
@@ -292,7 +292,7 @@ for (i in seq_along(period_keys)) {
   # Loop over exposures
   
   # # For check. Uncomment if you want to check
-  # exp = c(all_list)
+  # exp = c(pos_list)
   
   for(exp in exposure_list){
     
@@ -376,9 +376,6 @@ for (i in seq_along(period_keys)) {
     model_test <- test_set_eval$model
     test_data_new <- test_set_eval$new_data
     
-   
-    
-    if(TRUE){
     new_wb <- test_set_eval$wb
     new_reg_results <- test_set_eval$regression_results
     
@@ -407,36 +404,36 @@ for (i in seq_along(period_keys)) {
         pval_col <- which(names(new_reg_results) == "p.value")
         est_col  <- which(names(new_reg_results) == "estimate")
         
+        ## Rows to apply conditional formatting to (excluding mixture_score)
+        all_data_rows <- 2:(nrow(new_reg_results) + 1)
+        
+        
         ## Apply conditional formatting for p val
         if (!is.na(pval_col) && length(pval_col) > 0) {
           conditionalFormatting(
             wb, sheet = new_sheet_name,
             cols = pval_col,
-            rows = 2:(nrow(new_reg_results) + 1),  # +1 for header
+            rows = all_data_rows,
             rule = "<0.05",
-            style = createStyle(fontColour = "black", bgFill = "#63BE7B")
+            style = createStyle(fontColour = "black", bgFill = "#63BE7B"),
+            stack = TRUE
           )
         }
-        
         
         ## Apply conditional formatting for estimates
         if (!is.na(est_col) && length(est_col) > 0) {
           conditionalFormatting(
             wb, sheet = new_sheet_name,
             cols = est_col,
-            rows = 2:(nrow(new_reg_results) + 1),
+            rows = all_data_rows,
             type = "colourScale",
-            style = c("#F8696B", "#FFFFFF", "#63BE7B")  # red-white-green scale
+            style = c("#F8696B", "#FFFFFF", "#63BE7B"),  # red-white-green scale,
+            stack = TRUE
           )
         }
         
       }
     }
-    }
-    
-    # Add weights before transfer
-    # Add mixture distribution for states, maybe subplot later. chloropleth map for viz at later stages
-    
     
     # Get HICC estimates
     ## Extract
@@ -660,7 +657,7 @@ system(paste0("gsutil ls ", my_bucket, "/data/*.xlsx"), intern=T)
 ```
 
 # Loop for Age Stratified Modeling
-
+Not relevant
 
 ```{r}
 # Initialize windows

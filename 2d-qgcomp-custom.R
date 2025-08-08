@@ -139,7 +139,7 @@ qgcomp.model.mixture.ind <- function(object,
   
   if(norm_wt){
     ## Extract weights
-    wts <- c(object$pos.weights, object$neg.weights)
+    wts <- c(object$pos.weights, object$neg.weights)[exposure_names]
     
     ## set sheet name
     name_prefix <- "wt_trans"
@@ -161,18 +161,21 @@ qgcomp.model.mixture.ind <- function(object,
   ## Clean rhs string
   rhs_clean <- gsub("[\n\r]", " ", rhs)       # Replace line breaks with space
   rhs_clean <- gsub("\\s+", " ", rhs_clean) # Collapse multiple spaces
-  rhs_clean
   
-  # ## Remove exposure terms: to avoid multicollinearity
-  # rhs_terms <- strsplit(rhs_clean, " \\+ ")[[1]]
-  # 
-  # rhs_new <- if (length(rhs_terms[!rhs_terms %in% exposure_names]) > 0) {
-  #   paste0(" + ", paste(rhs_terms[!rhs_terms %in% exposure_names], collapse = " + "))
-  # } else {
-  #   ""
-  # }
+  ## Extract rhs terms
+  rhs_terms <- strsplit(rhs_clean, " \\+ ")[[1]]
   
-  formula_str <- paste0(lhs, "~", rhs_clean)
+  ## Get exposure terms
+  exposure_terms <- grep("^C[1-7]M", rhs_terms, value = TRUE)
+
+  ## Remove unwanted terms
+  rhs_new <- if (length(rhs_terms[!rhs_terms %in% setdiff(exposure_terms, exposure_names)]) > 0) {
+    paste0(" + ", paste(rhs_terms[!rhs_terms %in% setdiff(exposure_terms, exposure_names)], collapse = " + "))
+  } else {
+    ""
+  }
+  
+  formula_str <- paste0(lhs, "~", rhs_new)
   formula_str
   
   ## Model glm

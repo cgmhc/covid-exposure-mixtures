@@ -1,5 +1,5 @@
 ---
-title: "Modeling Test Sample Evaluation: Refit Eval"
+title: "Modeling Test Sample Evaluation: Refit Eval Weight Transfer"
 author: "Devon Watts, Pratik Nitin Khadse"
 date: "2025-05-23"
 output:
@@ -292,7 +292,7 @@ for (i in seq_along(period_keys)) {
   # Loop over exposures
   
   # # For check. Uncomment if you want to check
-  # exp = c("C1M")
+  # exp = c(pos_list)
   
   for(exp in exposure_list){
     
@@ -368,15 +368,13 @@ for (i in seq_along(period_keys)) {
                                            data_eval = test_data_df,
                                            observation_wt_col= c("observation_wt_trim"),
                                            exposure_names = exposures_to_extract,
-                                           norm_wt = TRUE)
+                                           norm_wt = TRUE,
+                                           weighted = FALSE)
 
   
     model_test <- test_set_eval$model
     test_data_new <- test_set_eval$new_data
     
-   
-    
-    if(TRUE){
     new_wb <- test_set_eval$wb
     new_reg_results <- test_set_eval$regression_results
     
@@ -405,63 +403,105 @@ for (i in seq_along(period_keys)) {
         pval_col <- which(names(new_reg_results) == "p.value")
         est_col  <- which(names(new_reg_results) == "estimate")
         
+        ## Identify rows to exclude (mixture_score rows)
+        mix_row_index <- which(new_reg_results$term == "mixture_score")
+        mix_rows_excel <- mix_row_index + 1  # +1 for header row
+        
+        ## Rows to apply conditional formatting to (excluding mixture_score)
+        all_data_rows <- 2:(nrow(new_reg_results) + 1)
+        rows_to_format <- c(setdiff(all_data_rows, mix_rows_excel))
+        
+        
         ## Apply conditional formatting for p val
-        if (!is.na(pval_col) && length(pval_col) > 0) {
+        if (!is.na(pval_col) && length(pval_col) > 0 && length(rows_to_format) > 0) {
           conditionalFormatting(
             wb, sheet = new_sheet_name,
             cols = pval_col,
-            rows = 2:(nrow(new_reg_results) + 1),  # +1 for header
+            rows = rows_to_format,
             rule = "<0.05",
-            style = createStyle(fontColour = "black", bgFill = "#63BE7B")
-          )
-        }
-        
-        
-        ## Apply conditional formatting for estimates
-        if (!is.na(est_col) && length(est_col) > 0) {
-          conditionalFormatting(
-            wb, sheet = new_sheet_name,
-            cols = est_col,
-            rows = 2:(nrow(new_reg_results) + 1),
-            type = "colourScale",
-            style = c("#F8696B", "#FFFFFF", "#63BE7B")  # red-white-green scale
-          )
-        }
-        
-        ## Apply formatting for mixture_score
-        mix_row_index <- which(new_reg_results$term == "mixture_score")
-        
-        if (length(mix_row_index) > 0) {
-          highlight_style <- createStyle(fgFill = "#FFFF00")
-        
-          addStyle(
-            wb, sheet = new_sheet_name,
-            style = highlight_style,
-            rows = mix_row_index + 1,  # +1 for header row
-            cols = 1:ncol(new_reg_results),
-            gridExpand = TRUE,
+            style = createStyle(fontColour = "black", bgFill = "#63BE7B"),
             stack = TRUE
           )
         }
         
-          # Visualization
-          mix_dist_plot <- ggplot(test_data_new, aes(x = mixture_score)) +
-            geom_histogram(aes(y = ..density..), bins = 30, fill = "skyblue", alpha = 0.6, color = "black") +
-            geom_density(color = "darkblue", size = 1) +
-            labs(title = "Distribution of mixture_score",
-                 x = "mixture_score", y = "Density") +
-            theme_minimal()
-          plot_file <- tempfile(fileext = ".png")
-          ggsave(plot_file, plot = mix_dist_plot, width = 6, height = 4, dpi = 300, bg = "white")
-          
-          ## Add image
-          insertImage(wb, sheet = new_sheet_name, file = plot_file,
-            width = 6, height = 4,
-            startRow = 1,  # top-aligned
-            startCol = ncol(new_reg_results) + 3)
+        ## Apply conditional formatting for estimates
+        if (!is.na(est_col) && length(est_col) > 0 && length(rows_to_format) > 0) {
+          conditionalFormatting(
+            wb, sheet = new_sheet_name,
+            cols = est_col,
+            rows = rows_to_format,
+            type = "colourScale",
+            style = c("#F8696B", "#FFFFFF", "#63BE7B"),  # red-white-green scale,
+            stack = TRUE
+          )
+        }
         
+        ## Apply yellow highlight for mixture_score
+        if (length(mix_row_index) > 0) {
+          highlight_style <- createStyle(fgFill = "#FFFF00")
+          addStyle(
+            wb, sheet = new_sheet_name,
+            style = highlight_style,
+            rows = mix_rows_excel,
+            cols = 1:ncol(new_reg_results),
+            stack = TRUE
+          )
+        }
+        
+        # Visualization: distribution
+        ## plot
+        mix_dist_plot <- ggplot(test_data_new, aes(x = mixture_score)) +
+          geom_histogram(aes(y = after_stat(density)),
+                         bins = 30, fill = "skyblue", alpha = 0.6, color = "black") +
+          geom_density(color = "darkblue", linewidth = 1) +
+          labs(title = "Distribution of mixture_score",
+               x = "mixture_score", y = "Density") +
+          theme_minimal()
+        
+        ## save
+        plot_file <- tempfile(fileext = ".png")
+        ggsave(plot_file, plot = mix_dist_plot, width = 6, height = 4, dpi = 300, bg = "white")
+        
+        ## Add image
+        insertImage(wb, sheet = new_sheet_name, file = plot_file,
+          width = 6, height = 4,
+          startRow = 1,  # top-aligned
+          startCol = ncol(new_reg_results) + 3)
+        
+        # Visualization: LOESS Smooth curve
+        ## plot
+        loess_plot <- ggplot(test_data_new, aes(x = mixture_score, y = gad_score_july)) +
+          geom_smooth(method = "loess", color = "darkgreen", linewidth = 1.2, se = TRUE) +
+          labs(title = "LOESS Smooth: Mixture Score vs. GAD Score",
+               x = "Mixture Score",
+               y = "GAD Score (July)") +
+          theme_minimal()
+        
+        ## save
+        loess_plot_file <- tempfile(fileext = ".png")
+        ggsave(loess_plot_file, plot = loess_plot, width = 6, height = 4, dpi = 300, bg = "white")
+        
+        ## Add image
+        ### Calcuate rows in excel based on pixels
+        image_height_in <- 4         # inches
+        openxlsx_dpi <- 72           # openxlsx assumes 72 DPI regardless of image file DPI
+        pixels_per_row <- 14.4       # typical Excel row height in pixels
+        buffer_rows <- 2             # space between images
+        
+        ### Compute how many rows the first image occupies
+        rows_occupied_by_image <- ceiling((image_height_in * openxlsx_dpi) / pixels_per_row)
+        
+        ### Define where the first image started
+        first_image_start_row <- 1
+        second_image_start_row <- first_image_start_row + rows_occupied_by_image + buffer_rows
+        
+        ### insert
+        insertImage(wb, sheet = new_sheet_name, file = loess_plot_file,
+            width = 6, height = image_height_in,
+            startRow = second_image_start_row,
+            startCol = ncol(new_reg_results) + 3)
+
       }
-    }
     }
     
     
@@ -580,7 +620,7 @@ result_df_kable <- final_df_bold %>%
                booktabs = TRUE, 
                format = "html", 
                escape = FALSE,
-               caption =  paste0("Quantile gcomp test sample results: refit eval")) %>%
+               caption =  paste0("Quantile gcomp test sample results: refit eval wt transfer")) %>%
   kable_styling(font_size = 15, fixed_thead = TRUE, bootstrap_options = c("striped", "hover"))
 
 print(result_df_kable)
@@ -596,7 +636,7 @@ result_hicc_kable <- final_df %>%
                booktabs = TRUE, 
                format = "html", 
                escape = FALSE,
-               caption = paste0("Quantile gcomp test sample hicc: refit eval")) %>%
+               caption = paste0("Quantile gcomp test sample hicc: refit eval wt transfer")) %>%
   kable_styling(font_size = 15, fixed_thead = TRUE, bootstrap_options = c("striped", "hover"))
 
 print(result_hicc_kable)
@@ -607,15 +647,15 @@ print(result_hicc_kable)
 
 ```{r}
 # Save locally
-save_kable(result_df_kable, paste0(dir_tables, "qgcomp_test_sample_results_refit_eval.html"))
-save_kable(result_hicc_kable, paste0(dir_tables, "qgcomp_test_sample_hicc_refit_eval.html"))
+save_kable(result_df_kable, paste0(dir_tables, "qgcomp_test_sample_results_refit_eval_wt.html"))
+save_kable(result_hicc_kable, paste0(dir_tables, "qgcomp_test_sample_hicc_refit_eval_wt.html"))
 
 # SAVE IN BUCKET: RESULT
 
 file_to_save <- copy(result_df_kable)
 
 # Replace with THE NAME of the file you're going to store in the bucket (don't delete the quotation marks)
-destination_filename = paste0(dir_tables, "qgcomp_test_sample_results_refit_eval.html")
+destination_filename = paste0(dir_tables, "qgcomp_test_sample_results_refit_eval_wt.html")
 
 ########################################################################
 ##
@@ -640,7 +680,7 @@ system(paste0("gsutil ls ", my_bucket, "/data/*.html"), intern=T)
 file_to_save <- copy(result_hicc_kable)
 
 # Replace with THE NAME of the file you're going to store in the bucket (don't delete the quotation marks)
-destination_filename = paste0(dir_tables, "qgcomp_test_sample_hicc_refit_eval.html")
+destination_filename = paste0(dir_tables, "qgcomp_test_sample_hicc_refit_eval_wt.html")
 
 ########################################################################
 ##
@@ -686,7 +726,9 @@ system(paste0("gsutil ls ", my_bucket, "/data/*.xlsx"), intern=T)
 
 ```
 
+
 # Loop for Age Stratified Modeling
+Not relevant
 
 
 ```{r}

@@ -113,12 +113,13 @@ qgcomp.model.mixture <- function(object,
 }
 
 
-# Function to get individual scaled mixture components
+# Function to get individual scaled mixture components ----------------------------------
 qgcomp.model.mixture.ind <- function(object, 
                                  data_eval, 
                                  observation_wt_col,
                                  exposure_names,
-                                 norm_wt = TRUE){
+                                 norm_wt = TRUE,
+                                 weighted = FALSE){
   
   ## Check class
   if (inherits(object, "qgcompfit")) {
@@ -148,6 +149,12 @@ qgcomp.model.mixture.ind <- function(object,
     
     ## set sheet name
     name_prefix <- "coef_trans"
+  }
+  
+  if(weighted){
+    ## Scale weights
+    wts <- wts / sum(wts)
+    
   }
   
   ## Multiply exposure training weights with exposure columns

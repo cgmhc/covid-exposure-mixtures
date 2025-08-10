@@ -370,7 +370,8 @@ for (i in seq_along(period_keys)) {
                                            data_eval = test_data_df,
                                            observation_wt_col= c("observation_wt_trim"),
                                            exposure_names = exposures_to_extract,
-                                           norm_wt = FALSE)
+                                           norm_wt = FALSE,
+                                           weighted = FALSE)
 
     
     model_test <- test_set_eval$model

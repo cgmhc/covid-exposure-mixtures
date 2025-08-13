@@ -252,8 +252,25 @@ add_stringency_to_cope = function(cope_data, stringency_index = "march_15_june_3
 }
 ```
 
-# Check VIF
-to do
+
+```{r}
+# Function to rescale stringency
+rescale_to_exposures <- function(df, target_var, exposure_cols) {
+  # Get min and max of exposures
+  min_exp <- min(df[, exposure_cols], na.rm = TRUE)
+  max_exp <- max(df[, exposure_cols], na.rm = TRUE)
+  
+  # Get min and max of target variable
+  min_tgt <- min(df[[target_var]], na.rm = TRUE)
+  max_tgt <- max(df[[target_var]], na.rm = TRUE)
+  
+  # Perform min-max scaling to match exposure range
+  scaled_var <- ((df[[target_var]] - min_tgt) / (max_tgt - min_tgt)) *
+                (max_exp - min_exp) + min_exp
+  
+  return(scaled_var)
+}
+```
 
 
 # Loop for exposure windows
@@ -314,6 +331,40 @@ for (i in seq_along(period_keys)) {
   ## Calling function to add stringency index to df 
   cope_auo_july_no_miss_w_stringency = add_stringency_to_cope(full_sample_data_filtered, stringency_keys[i])
   
+  ## Rescale stringency (modified min-max scaling)
+  ### get exposure cols
+  exposure_cols <- grep("^C[1-7]M", names(cope_auo_july_no_miss_w_stringency), value = TRUE)
+  
+  ### make copy of unscaled stringency
+  cope_auo_july_no_miss_w_stringency[[paste0("stringency_unscaled", "_", stringency_keys[i])]] <- cope_auo_july_no_miss_w_stringency[[paste0("stringency", "_", stringency_keys[i])]] 
+  
+  ### new stringency scaled
+  cope_auo_july_no_miss_w_stringency[[paste0("stringency", "_", stringency_keys[i])]] <- 
+    rescale_to_exposures(cope_auo_july_no_miss_w_stringency, paste0("stringency", "_", 
+                                                                    stringency_keys[i]), exposure_cols)
+  
+  ### Sanity check: min max values
+  message("Unscaled stringency_", stringency_keys[i], 
+          " | Min: ",
+          min(cope_auo_july_no_miss_w_stringency[[paste0("stringency_unscaled", "_", stringency_keys[i])]], 
+              na.rm = TRUE),
+          " | Max: ", 
+          max(cope_auo_july_no_miss_w_stringency[[paste0("stringency_unscaled", "_", stringency_keys[i])]], 
+              na.rm = TRUE))
+  
+  message("Scaled stringency_", stringency_keys[i], 
+          " | Min: ", 
+          min(cope_auo_july_no_miss_w_stringency[[paste0("stringency", "_", stringency_keys[i])]], 
+              na.rm = TRUE),
+          " | Max: ", 
+          max(cope_auo_july_no_miss_w_stringency[[paste0("stringency", "_", stringency_keys[i])]], 
+              na.rm = TRUE))
+
+  message("Exposure range | Min: ", 
+          min(cope_auo_july_no_miss_w_stringency[, exposure_cols], na.rm = TRUE), 
+          " | Max: ", 
+          max(cope_auo_july_no_miss_w_stringency[, exposure_cols], na.rm = TRUE))
+  
   ## New age groups
   cope_auo_july_no_miss_w_stringency = cope_auo_july_no_miss_w_stringency %>%
     mutate(
@@ -328,6 +379,8 @@ for (i in seq_along(period_keys)) {
   ## Get train and test splits for modeling
   train_data_df <- cope_auo_july_no_miss_w_stringency %>% filter(train_flag == TRUE)
   test_data_df <- cope_auo_july_no_miss_w_stringency %>% filter(train_flag == FALSE)
+  
+  
   
   ## Create window wise sets
   assign(paste0("train_data_df", tolower(suffixes[i])), copy(train_data_df))

@@ -47,12 +47,16 @@ packages = c("tidyverse", "haven", "qgcomp", "dplyr", "ggplot2",
             "moments", "naniar", "VIM", "missForest", "tidymodels", 
             "purrr", "gridExtra", "knitr", "infotheo", "igraph", 
              "ggraph", "lubridate", "zoo", "ggridges", "slider", 
-             "data.table", "stats", "arrow"
+             "data.table", "stats", "arrow", "gtsummary", "gt"
             )
 
 # Call the package_install function 
 package_install(packages)
 ```
+```{r}
+dir_tables <- here::here(paste0("01-extract-aou-data/tables/"))
+```
+
 
 # Load data
 
@@ -118,6 +122,66 @@ cope_auo$RegionName           = as.factor(cope_auo$RegionName)
 
 str(cope_auo)
 ```
+
+
+# Study Sample Characteristics
+
+```{r}
+# Get demographic breakdown
+
+## gt summary
+summary_demo <- cope_auo %>%
+  tbl_summary(include = c(gender, 
+                          race, 
+                          sex_at_birth,
+                          age_bin,
+                          home_ownership,
+                          household_income_cat,
+                          have_job),
+              missing = "no",) %>%
+   bold_labels()
+
+## convert to gt
+summary_demo_gt <- as_gt(summary_demo)
+
+summary_demo_gt
+```
+
+# Export
+
+```{r}
+# Export
+
+# Save locally
+gt::gtsave(summary_demo_gt, paste0(dir_tables, "summary_demo.html"))
+
+# SAVE IN BUCKET
+
+file_to_save <- copy(summary_demo_gt)
+
+# Replace with THE NAME of the file you're going to store in the bucket (don't delete the quotation marks)
+destination_filename = paste0(dir_tables, "summary_demo.html")
+
+########################################################################
+##
+################# DON'T CHANGE FROM HERE ###############################
+##
+########################################################################
+
+# store the dataframe in current workspace
+gt::gtsave(file_to_save, destination_filename)
+
+# Get the bucket name
+my_bucket = Sys.getenv('WORKSPACE_BUCKET')
+
+# Copy the file from current workspace to the bucket
+system(paste0("gsutil cp ", destination_filename, " ", my_bucket, "/data/"), intern=T)
+
+# Check if file is in the bucket
+system(paste0("gsutil ls ", my_bucket, "/data/*.html"), intern=T)
+
+```
+
 
 
 # Imputation

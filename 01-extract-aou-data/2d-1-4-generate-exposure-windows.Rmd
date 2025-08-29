@@ -108,6 +108,53 @@ cope_auo  = read_csv(name_of_second_file_in_bucket)
 head(cope_auo)
 ```
 
+```{r}
+# This snippet assumes that you run setup first
+
+# This code copies a file from your Google Bucket into a dataframe
+
+# replace 'test.csv' with the name of the file in your google bucket (don't delete the quotation marks)
+#name_of_file_in_bucket = 'basic_conditions_gad_completion_16122024.csv'
+name_of_file_in_bucket = 'basic_conditions_gad_completion_final.parquet'
+########################################################################
+##
+################# DON'T CHANGE FROM HERE ###############################
+##
+########################################################################
+
+# Get the bucket name
+my_bucket = Sys.getenv('WORKSPACE_BUCKET')
+
+# Copy the file from current workspace to the bucket
+system(paste0("gsutil cp ", my_bucket, "/data/", name_of_file_in_bucket, " ."), intern=T)
+
+# Loading input into a dataframe with error handling
+# Load file with error handling
+tryCatch({
+ df = read_parquet(name_of_file_in_bucket)
+ 
+ # Get column info
+ char_cols = names(df)[sapply(df, is.character)]
+ total_cols = ncol(df)
+ total_rows = nrow(df)
+ unique_persons = length(unique(df$person_id))
+ 
+ # Print results
+ cat("Character columns:", paste(char_cols, collapse=", "), "\n")
+ cat("Total columns:", total_cols, "\n")
+ cat("Total rows:", total_rows, "\n")
+ cat("Number of unique person_ids:", unique_persons, "\n")
+ 
+ head(df)
+}, error = function(e) {
+ message("Error loading file: ", e$message)
+})
+
+# Create copy
+bnc_df <- copy(df)
+rm(df)
+```
+
 
 ```{r}
 # Removing any rows with missing outcome 
@@ -126,18 +173,130 @@ str(cope_auo)
 
 # Study Sample Characteristics
 
+## Compliance
+
+
+```{r}
+# Clean column names
+colnames(cope_auo) <- gsub(" ", "_", colnames(cope_auo))
+```
+
+
+```{r}
+# Merge to conditions
+
+cope_auo_summary <- cope_auo %>%
+  select(
+    person_id,
+    RegionName,
+    race,
+    sex_at_birth,
+    household_income_cat,
+    home_ownership,
+    have_job,
+    StringencyIndex_Average_202005,
+    gad_score_avg_july,
+    date_of_birth,
+    age_2020,
+    age_bin,
+    C1M_School_closing,
+    C2M_Workplace_closing,
+    C3M_Cancel_public_events,
+    C4M_Restrictions_on_gatherings,
+    C5M_Close_public_transport,
+    C6M_Stay_at_home_requirements,
+    C7M_Restrictions_on_internal_movement,
+    gad_score_july,
+    gad_score_avg_may,
+    gad_score_may,
+    gad_score_avg_june,
+    gad_score_june
+  ) %>%
+  inner_join(
+    bnc_df %>% 
+      select(
+        person_id,
+        anxiety_disorder_before_covid_lifetime,
+        generalized_anxiety_disorder_before_covid_lifetime,
+        anxiety_disorder_1yr_before_covid,
+        generalized_anxiety_disorder_1yr_before_covid,
+        Sex,
+        Education,
+        Employment,
+        Insurance,
+        Home,
+        Income,
+        MaritalStatus,
+        Race,
+        Birthplace
+      ),
+    by = "person_id"
+  )
+
+nrow(cope_auo_summary)
+colnames(cope_auo_summary)
+```
+
+
+```{r}
+# Collapse sex categories
+cope_auo_summary <- cope_auo_summary %>%
+  mutate(sex_at_birth = case_when(
+    sex_at_birth %in% c("I prefer not to answer", "PMI: Skip") ~ "Skip",
+    sex_at_birth %in% c("Intersex", "No_matching_concept") ~ "Other",
+    TRUE ~ sex_at_birth
+  ))
+
+
+unique(cope_auo_summary$sex_at_birth)
+```
+
+
+```{r}
+# Collapse Education
+
+cope_auo_summary <- cope_auo_summary %>%
+  mutate(Education = case_when(
+    Education %in% c("One Through Four", "Five Through Eight") ~ "One Through Eight",
+    Education %in% c("Prefer Not To Answer", "Skip") ~ "Not Answered",
+    TRUE ~ Education
+  ))
+
+unique(cope_auo_summary$Education)
+```
+
+
+```{r}
+# Collapse Race
+
+cope_auo_summary <- cope_auo_summary %>%
+  mutate(Race = case_when(
+    Race %in% c("Skip", "Prefer Not To Answer") ~ "Not Answered",
+    Race %in% c("NHPI") ~ "Race Ethnicity None Of These",
+    TRUE ~ Race
+  ))
+
+unique(cope_auo_summary$Race)
+```
+
+
 ```{r}
 # Get demographic breakdown
 
 ## gt summary
-summary_demo <- cope_auo %>%
-  tbl_summary(include = c(gender, 
-                          race, 
-                          sex_at_birth,
+summary_demo <- cope_auo_summary %>%
+  tbl_summary(include = c(sex_at_birth, 
+                          Race, 
                           age_bin,
                           home_ownership,
                           household_income_cat,
-                          have_job),
+                          have_job,
+                          Education,
+                          anxiety_disorder_before_covid_lifetime,
+                          anxiety_disorder_1yr_before_covid,
+                          generalized_anxiety_disorder_before_covid_lifetime,
+                          generalized_anxiety_disorder_1yr_before_covid
+                          ),
               missing = "no",) %>%
    bold_labels()
 

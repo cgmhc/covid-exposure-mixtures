@@ -115,6 +115,39 @@ sapply(df[c("Education", "Employment", "Home", "Income", "Insurance",
            "LivingSituation", "MaritalStatus", "Race", "Sex")], class)
 ```
 
+# Summary Characteristics (before merge)
+
+
+```{r}
+# Get demographic breakdown
+
+## gt summary
+summary_df <- df %>%
+  tbl_summary(include = c(Sex, 
+                          Education, 
+                          Employment,
+                          Insurance,
+                          Home,
+                          Income,
+                          LivingSituation,
+                          MaritalStatus,
+                          Race,
+                          Birthplace,
+                          anxiety_disorder_before_covid_lifetime,
+                          anxiety_disorder_1yr_before_covid,
+                          generalized_anxiety_disorder_before_covid_lifetime,
+                          generalized_anxiety_disorder_1yr_before_covid
+                          ),
+              missing = "no",) %>%
+   bold_labels()
+
+## convert to gt
+summary_df_gt <- as_gt(summary_df)
+
+summary_df_gt
+```
+
+
 
 # Review
 

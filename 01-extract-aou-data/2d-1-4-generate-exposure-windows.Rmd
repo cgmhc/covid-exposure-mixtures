@@ -257,8 +257,9 @@ unique(cope_auo_summary$sex_at_birth)
 
 cope_auo_summary <- cope_auo_summary %>%
   mutate(Education = case_when(
-    Education %in% c("One Through Four", "Five Through Eight") ~ "One Through Eight",
+    Education %in% c("One Through Four", "Five Through Eight", "Nine Through Eleven", "Twelve Or GED") ~ "High School or Less",
     Education %in% c("Prefer Not To Answer", "Skip") ~ "Not Answered",
+    Education %in% c("College One to Three") ~ "Partial College",
     TRUE ~ Education
   ))
 
@@ -286,7 +287,7 @@ unique(cope_auo_summary$Race)
 ## gt summary
 summary_demo <- cope_auo_summary %>%
   tbl_summary(include = c(sex_at_birth, 
-                          Race, 
+                          race, 
                           age_bin,
                           home_ownership,
                           household_income_cat,

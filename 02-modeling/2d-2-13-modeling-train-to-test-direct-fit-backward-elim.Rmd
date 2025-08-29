@@ -693,6 +693,9 @@ for (i in seq_along(period_keys)) {
   results_est_age_list <- list()
   results_hicc_age_list <- list()
   
+  # # For trial check . Uncomment if you want to check
+  # group <- "18-44"
+  
   for (group in levels(test_data_df$age_group)){
     print(paste0("Processing for age group: ", group))
     
@@ -916,6 +919,71 @@ for (i in seq_along(period_keys)) {
                                               q = NULL,
                                               bayes = FALSE) 
           
+          # print(paste0("Period ", suffixes[i]))
+          # print(paste0("Age group ", group))
+          # print(exposures_to_extract)
+          # print(model_qgcomp$fit)
+          
+          # Get excel for TEST SET FIT
+          if(consolidation_name == "all_components"){
+          
+            ## Get regression results
+            regression_results_test <- broom::tidy(model_qgcomp$fit)
+            
+            ## Create or load the workbook
+            if (!exists("wb_test")) {
+              wb_test <- createWorkbook()
+            }
+            
+            ## Set digit format
+            options("openxlsx.numFmt" = "0.000")
+            
+            ## Define sheet name
+            sheet_name_test <- paste0(sub("_.*", "", consolidation_name), suffixes[i], "_",group, "_", sr_no)
+            sheet_name_test <- gsub("-", "_", sheet_name_test)   # Replace - with _
+            sheet_name_test <- gsub("\\+", "", sheet_name_test)  # Remove +
+            
+            ## Print name
+            print(paste0("Sheet Name:", sheet_name_test))
+            
+            ## Add sheet to workbook
+            addWorksheet(wb_test, sheet_name_test)
+            
+            ## Write the data to the sheet
+            writeData(wb_test, sheet = sheet_name_test, x = regression_results_test)
+            
+            ## Auto-adjust column widths
+            setColWidths(wb_test, sheet = sheet_name_test, cols = 1:ncol(regression_results_test), 
+                         widths = "auto")
+            
+            ## Identify relevant columns
+            pval_col_test <- which(names(regression_results_test) == "p.value")
+            est_col_test  <- which(names(regression_results_test) == "estimate")
+            
+            ## Apply conditional formatting for p val
+            if (!is.na(pval_col_test) && length(pval_col_test) > 0) {
+              conditionalFormatting(
+                wb_test, sheet = sheet_name_test,
+                cols = pval_col_test,
+                rows = 2:(nrow(regression_results_test) + 1),  # +1 for header
+                rule = "<0.05",
+                style = createStyle(fontColour = "black", bgFill = "#63BE7B")
+              )
+            }
+            
+            ## Apply conditional formatting for estimates
+            if (!is.na(est_col_test) && length(est_col_test) > 0) {
+              conditionalFormatting(
+                wb_test, sheet = sheet_name_test,
+                cols = est_col_test,
+                rows = 2:(nrow(regression_results_test) + 1),
+                type = "colourScale",
+                style = c("#F8696B", "#FFFFFF", "#63BE7B")  # red-white-green scale
+              )
+            }
+            
+          }
+          
           ## Robust
           robust_df <- qgcomp.robust.est(fit.object = model_qgcomp$fit,
                                    cluster_robust = TRUE, 
@@ -1132,6 +1200,31 @@ file_to_save <- copy(wb)
 
 # Replace with THE NAME of the file you're going to store in the bucket (don't delete the quotation marks)
 destination_filename = paste0(dir_tables, "qgcomp_train_to_test_age_strat_regression_results_back_elim.xlsx")
+
+########################################################################
+##
+################# DON'T CHANGE FROM HERE ###############################
+##
+########################################################################
+
+# store the dataframe in current workspace
+saveWorkbook(file_to_save, destination_filename, overwrite = TRUE)
+
+# Get the bucket name
+my_bucket = Sys.getenv('WORKSPACE_BUCKET')
+
+# Copy the file from current workspace to the bucket
+system(paste0("gsutil cp ", destination_filename, " ", my_bucket, "/data/"), intern=T)
+
+# Check if file is in the bucket
+system(paste0("gsutil ls ", my_bucket, "/data/*.xlsx"), intern=T)
+
+
+# SAVE IN BUCKET: REGRESSION RESULTS TEST FIT
+file_to_save <- copy(wb_test)
+
+# Replace with THE NAME of the file you're going to store in the bucket (don't delete the quotation marks)
+destination_filename = paste0(dir_tables, "qgcomp_train_to_test_age_strat_regression_results_back_elim_test_fit.xlsx")
 
 ########################################################################
 ##

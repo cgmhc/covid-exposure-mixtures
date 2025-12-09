@@ -189,6 +189,7 @@ stringency_keys <- c("march_15_june_30", "march_22_may_23", "april_12_may_23")
 results_est_list <- list()
 results_hicc_list <- list()
 results_weight_list <- list()
+results_components_list <- list()
 
 for (i in seq_along(period_keys)) {
   
@@ -272,6 +273,20 @@ for (i in seq_along(period_keys)) {
             paste(pos_list, collapse = ", \n")))
   print(cat(" -------------- Negative Components (", sub("^_", "", suffixes[i]), ") :- --------------------\n", 
             paste(neg_list, collapse = ", \n")))
+  
+  ## Components summary
+  results_components_list[[i]] <- data.frame(
+    period  = sub("^_", "", suffixes[i]),
+    component_type  = c("all", 
+                        "positive", 
+                        "negative"),
+    component_names = c(
+      paste(all_list, collapse = ", "),
+      paste(pos_list, collapse = ", "),
+      paste(neg_list, collapse = ", ")
+    ),
+    stringsAsFactors = FALSE
+  )
   
   ## Final exposure list
   exposure_list <- list(c("C1M"), 
@@ -496,8 +511,27 @@ for (i in seq_along(period_keys)) {
 results_est_list
 results_hicc_list
 results_weight_list
+results_components_list
 ```
 
+
+
+```{r}
+# Create kable view for components
+
+component_results_df <- rbindlist(results_components_list)
+
+## Save as kable
+component_result_df_kable <- component_results_df %>%
+  knitr::kable(digits = 3, 
+               booktabs = TRUE, 
+               format = "html", 
+               escape = FALSE,
+               caption = paste0("Quantile gcomp train identification, test sample results: direct fit components based on train")) %>%
+  kable_styling(font_size = 15, fixed_thead = TRUE, bootstrap_options = c("striped", "hover"))
+
+print(component_result_df_kable)
+```
 
 
 ```{r}

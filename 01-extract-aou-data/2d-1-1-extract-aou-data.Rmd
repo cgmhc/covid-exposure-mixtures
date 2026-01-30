@@ -19,12 +19,31 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r}
 # Run reticulate before proceeding
 library(reticulate)
+
+## Set up virtual environment. Need this since we can't edit some packages in system
+venv_name <- "aou-py"
+
+## Create venv if missing
+if (!virtualenv_exists(venv_name)) {
+  message("Creating virtualenv: ", venv_name)
+  virtualenv_create(envname = venv_name, python = Sys.which("python3"))
+} else {
+  message("Using existing virtualenv: ", venv_name)
+}
+
+## Use venv
+use_virtualenv(venv_name, required = TRUE)
 ```
+
+
 
 
 ```{r}
 # Install packages using py_install, ensure pip = TRUE
-py_install("seaborn", pip = TRUE)
+py_install("pip", pip = TRUE, user = TRUE, upgrade = TRUE) ## upgrade pip
+py_install("seaborn", pip = TRUE, user = TRUE)
+py_install(c("pandas-gbq", "google-cloud-bigquery"), pip = TRUE, user = TRUE)
+
 ```
 
 
@@ -34,6 +53,7 @@ py_install("seaborn", pip = TRUE)
 
 
 ```{python}
+import os
 import pandas as pd
 import numpy as np
 import seaborn as sns
@@ -41,13 +61,13 @@ from datetime import datetime
 import time
 from pandas import Timestamp
 import warnings
+from dateutil.relativedelta import relativedelta
 warnings.filterwarnings("ignore")
+WORKSPACE_CDR = os.getenv("WORKSPACE_CDR")
+assert WORKSPACE_CDR, "WORKSPACE_CDR env var is missing"
 ```
 
 ```{python}
-import pandas
-import os
-
 # This query represents dataset "basic_cope" for domain "person" and was generated for All of Us Registered Tier Dataset v7
 dataset_67240677_person_sql = """
     SELECT
@@ -119,7 +139,7 @@ dataset_67240677_person_sql = """
                             ) criteria 
                         ) )"""
 
-dataset_67240677_person_df = pandas.read_gbq(
+dataset_67240677_person_df = pd.read_gbq(
     dataset_67240677_person_sql,
     dialect="standard",
     use_bqstorage_api=("BIGQUERY_STORAGE_API_ENABLED" in os.environ),
@@ -130,8 +150,6 @@ dataset_67240677_person_df.head(5)
 
 
 ```{python}
-import pandas
-import os
 
 # This query represents dataset "individual_ses" for domain "survey" and was generated for All of Us Registered Tier Dataset v7
 dataset_53831970_survey_sql = """
@@ -201,7 +219,7 @@ dataset_53831970_survey_sql = """
                                 ) criteria 
                             ) ))"""
 
-dataset_53831970_survey_df = pandas.read_gbq(
+dataset_53831970_survey_df = pd.read_gbq(
     dataset_53831970_survey_sql,
     dialect="standard",
     use_bqstorage_api=("BIGQUERY_STORAGE_API_ENABLED" in os.environ),
@@ -212,8 +230,6 @@ dataset_53831970_survey_df.head(5)
 
 
 ```{python}
-import pandas
-import os
 
 # This query represents dataset "basic_cope" for domain "survey" and was generated for All of Us Registered Tier Dataset v7
 dataset_00067982_survey_sql = """
@@ -306,7 +322,7 @@ dataset_00067982_survey_sql = """
                                     ) criteria 
                                 ) ))"""
 
-dataset_00067982_survey_df = pandas.read_gbq(
+dataset_00067982_survey_df = pd.read_gbq(
     dataset_00067982_survey_sql,
     dialect="standard",
     use_bqstorage_api=("BIGQUERY_STORAGE_API_ENABLED" in os.environ),
@@ -379,9 +395,19 @@ demo['race'] =demo['race'].apply(lambda x: race(x))
 demo['sex_at_birth'] = demo['sex_at_birth'].apply(lambda x: sex(x))
 
 ### Age at 2020-05-31
-demo['age_2020'] = Timestamp('2020-05-31 06:00:00+0000', tz='UTC') - demo['date_of_birth'] ## change to May 01
-demo['age_2020'] = demo['age_2020']/ np.timedelta64(1, 'Y')
-demo['age_2020'] = demo['age_2020'].round(2)
+if False: # old code
+  demo['age_2020'] = Timestamp('2020-05-31 06:00:00+0000', tz='UTC') - demo['date_of_birth'] ## change to May 01
+  demo['age_2020'] = demo['age_2020']/ np.timedelta64(1, 'Y')
+  demo['age_2020'] = demo['age_2020'].round(2)
+
+
+### Age at 2020-05-31
+ref_date = pd.Timestamp('2020-05-01', tz='UTC')
+demo['age_2020'] = [
+    relativedelta(ref_date, dob).years
+    for dob in pd.to_datetime(demo['date_of_birth'], utc=True)
+]
+
 ```
 
 

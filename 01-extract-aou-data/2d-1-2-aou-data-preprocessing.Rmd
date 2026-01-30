@@ -19,12 +19,28 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r}
 # Run reticulate before proceeding
 library(reticulate)
+
+## Set up virtual environment. Need this since we can't edit some packages in system
+venv_name <- "aou-py"
+
+## Create venv if missing
+if (!virtualenv_exists(venv_name)) {
+  message("Creating virtualenv: ", venv_name)
+  virtualenv_create(envname = venv_name, python = Sys.which("python3"))
+} else {
+  message("Using existing virtualenv: ", venv_name)
+}
+
+## Use venv
+use_virtualenv(venv_name, required = TRUE)
 ```
 
 
 ```{r}
 # Install packages using py_install, ensure pip = TRUE
-py_install("seaborn", pip = TRUE)
+py_install("pip", pip = TRUE, user = TRUE, upgrade = TRUE) ## upgrade pip
+py_install("seaborn", pip = TRUE, user = TRUE)
+py_install(c("pandas-gbq", "google-cloud-bigquery"), pip = TRUE, user = TRUE)
 ```
 
 
@@ -41,6 +57,8 @@ import warnings
 warnings.filterwarnings("ignore")
 import os
 import subprocess
+WORKSPACE_CDR = os.getenv("WORKSPACE_CDR")
+assert WORKSPACE_CDR, "WORKSPACE_CDR env var is missing"
 ```
 
 
@@ -49,7 +67,26 @@ import subprocess
 covariants = pd.read_csv('2c_idv_survey_.csv')
 demo = pd.read_csv('2d_demo.csv')
 cope_072020 = pd.read_csv('2d_cope_072020.csv')
-us_oxf = pd.read_csv('OxCGRT_USA_latest.csv')
+
+```
+
+
+```{python}
+# import the US OxCGRT data
+if False: ## old code
+  us_oxf = pd.read_csv('OxCGRT_USA_latest.csv')
+
+
+
+file_cache = "OxCGRT_US_latest.csv"
+us_url = "https://raw.githubusercontent.com/OxCGRT/USA-covid-policy/master/data/OxCGRT_US_latest.csv"
+if not os.path.exists(file_cache):
+    us_oxf = pd.read_csv(us_url)
+    us_oxf.to_csv(file_cache, index=False)
+else:
+    us_oxf = pd.read_csv(file_cache)
+
+us_oxf.head()
 ```
 
 
@@ -183,34 +220,35 @@ us_oxf.info()
 # Export
 
 ```{python}
-# This snippet assumes you run setup first
-
-# This code saves your dataframe into a csv file in a "data" folder in Google Bucket
-
-# Replace df with THE NAME OF YOUR DATAFRAME
-my_dataframe = us_oxf  
-
-# Replace 'test.csv' with THE NAME of the file you're going to store in the bucket (don't delete the quotation marks)
-destination_filename = 'us_oxf_all.csv'
-
-########################################################################
-##
-################# DON'T CHANGE FROM HERE ###############################
-##
-########################################################################
-
-# save dataframe in a csv file in the same workspace as the notebook
-my_dataframe.to_csv(destination_filename, index=False)
-
-# get the bucket name
-my_bucket = os.getenv('WORKSPACE_BUCKET')
-
-# copy csv file to the bucket
-args = ["gsutil", "cp", f"./{destination_filename}", f"{my_bucket}/data/"]
-output = subprocess.run(args, capture_output=True)
-
-# print output from gsutil
-output.stderr
+if False: 
+  # This snippet assumes you run setup first
+  
+  # This code saves your dataframe into a csv file in a "data" folder in Google Bucket
+  
+  # Replace df with THE NAME OF YOUR DATAFRAME
+  my_dataframe = us_oxf  
+  
+  # Replace 'test.csv' with THE NAME of the file you're going to store in the bucket (don't delete the quotation marks)
+  destination_filename = 'us_oxf_all.csv'
+  
+  ########################################################################
+  ##
+  ################# DON'T CHANGE FROM HERE ###############################
+  ##
+  ########################################################################
+  
+  # save dataframe in a csv file in the same workspace as the notebook
+  my_dataframe.to_csv(destination_filename, index=False)
+  
+  # get the bucket name
+  my_bucket = os.getenv('WORKSPACE_BUCKET')
+  
+  # copy csv file to the bucket
+  args = ["gsutil", "cp", f"./{destination_filename}", f"{my_bucket}/data/"]
+  output = subprocess.run(args, capture_output=True)
+  
+  # print output from gsutil
+  output.stderr
 ```
 
 # Filtered by columns
@@ -223,34 +261,35 @@ us_oxf = us_oxf[['RegionName','Date','StringencyIndex_Average']]
 
 # Export
 ```{python}
-# This snippet assumes you run setup first
-
-# This code saves your dataframe into a csv file in a "data" folder in Google Bucket
-
-# Replace df with THE NAME OF YOUR DATAFRAME
-my_dataframe = us_oxf   
-
-# Replace 'test.csv' with THE NAME of the file you're going to store in the bucket (don't delete the quotation marks)
-destination_filename = 'us_oxf.csv'
-
-########################################################################
-##
-################# DON'T CHANGE FROM HERE ###############################
-##
-########################################################################
-
-# save dataframe in a csv file in the same workspace as the notebook
-my_dataframe.to_csv(destination_filename, index=False)
-
-# get the bucket name
-my_bucket = os.getenv('WORKSPACE_BUCKET')
-
-# copy csv file to the bucket
-args = ["gsutil", "cp", f"./{destination_filename}", f"{my_bucket}/data/"]
-output = subprocess.run(args, capture_output=True)
-
-# print output from gsutil
-output.stderr
+if False:
+  # This snippet assumes you run setup first
+  
+  # This code saves your dataframe into a csv file in a "data" folder in Google Bucket
+  
+  # Replace df with THE NAME OF YOUR DATAFRAME
+  my_dataframe = us_oxf   
+  
+  # Replace 'test.csv' with THE NAME of the file you're going to store in the bucket (don't delete the quotation marks)
+  destination_filename = 'us_oxf.csv'
+  
+  ########################################################################
+  ##
+  ################# DON'T CHANGE FROM HERE ###############################
+  ##
+  ########################################################################
+  
+  # save dataframe in a csv file in the same workspace as the notebook
+  my_dataframe.to_csv(destination_filename, index=False)
+  
+  # get the bucket name
+  my_bucket = os.getenv('WORKSPACE_BUCKET')
+  
+  # copy csv file to the bucket
+  args = ["gsutil", "cp", f"./{destination_filename}", f"{my_bucket}/data/"]
+  output = subprocess.run(args, capture_output=True)
+  
+  # print output from gsutil
+  output.stderr
 ```
 
 
@@ -355,8 +394,6 @@ us_oxf_202005_g = us_oxf_202005_g.rename(columns={'zip3':'zip_code'})
 # Get zip3 AoU data
 
 ```{python}
-import pandas
-import os
 
 # This query represents dataset "zip3_2d" for domain "zip_code_socioeconomic" and was generated for All of Us Controlled Tier Dataset v7
 dataset_15775281_zip_code_socioeconomic_sql = """
@@ -425,7 +462,7 @@ dataset_15775281_zip_code_socioeconomic_sql = """
                     AND observation_source_concept_id = 1585250 
                     AND observation.value_as_string NOT LIKE 'Res%'"""
 
-dataset_15775281_zip_code_socioeconomic_df = pandas.read_gbq(
+dataset_15775281_zip_code_socioeconomic_df = pd.read_gbq(
     dataset_15775281_zip_code_socioeconomic_sql,
     dialect="standard",
     use_bqstorage_api=("BIGQUERY_STORAGE_API_ENABLED" in os.environ),
@@ -546,61 +583,63 @@ data.info()
 # Export
 
 ```{python}
-# This snippet assumes you run setup first
-
-# This code saves your dataframe into a csv file in a "data" folder in Google Bucket
-
-# Replace df with THE NAME OF YOUR DATAFRAME
-my_dataframe = data  
-
-# Replace 'test.csv' with THE NAME of the file you're going to store in the bucket (don't delete the quotation marks)
-destination_filename = 'mvp_2d_0725.csv'
-
-########################################################################
-##
-################# DON'T CHANGE FROM HERE ###############################
-##
-########################################################################
-
-# save dataframe in a csv file in the same workspace as the notebook
-my_dataframe.to_csv(destination_filename, index=False)
-
-# get the bucket name
-my_bucket = os.getenv('WORKSPACE_BUCKET')
-
-# copy csv file to the bucket
-args = ["gsutil", "cp", f"./{destination_filename}", f"{my_bucket}/data/"]
-output = subprocess.run(args, capture_output=True)
-
-# print output from gsutil
-output.stderr
+if False:
+  # This snippet assumes you run setup first
+  
+  # This code saves your dataframe into a csv file in a "data" folder in Google Bucket
+  
+  # Replace df with THE NAME OF YOUR DATAFRAME
+  my_dataframe = data  
+  
+  # Replace 'test.csv' with THE NAME of the file you're going to store in the bucket (don't delete the quotation marks)
+  destination_filename = 'mvp_2d_0725.csv'
+  
+  ########################################################################
+  ##
+  ################# DON'T CHANGE FROM HERE ###############################
+  ##
+  ########################################################################
+  
+  # save dataframe in a csv file in the same workspace as the notebook
+  my_dataframe.to_csv(destination_filename, index=False)
+  
+  # get the bucket name
+  my_bucket = os.getenv('WORKSPACE_BUCKET')
+  
+  # copy csv file to the bucket
+  args = ["gsutil", "cp", f"./{destination_filename}", f"{my_bucket}/data/"]
+  output = subprocess.run(args, capture_output=True)
+  
+  # print output from gsutil
+  output.stderr
 ```
 
 
 ```{python}
-# This snippet assumes you run setup first
-
-# This code copies file in your Google Bucket and loads it into a dataframe
-
-# Replace 'test.csv' with THE NAME of the file you're going to download from the bucket (don't delete the quotation marks)
-name_of_file_in_bucket = 'us_oxf_all.csv'
-
-########################################################################
-##
-################# DON'T CHANGE FROM HERE ###############################
-##
-########################################################################
-
-# get the bucket name
-my_bucket = os.getenv('WORKSPACE_BUCKET')
-
-# copy csv file from the bucket to the current working space
-os.system(f"gsutil cp '{my_bucket}/data/{name_of_file_in_bucket}' .")
-
-print(f'[INFO] {name_of_file_in_bucket} is successfully downloaded into your working space')
-# save dataframe in a csv file in the same workspace as the notebook
-my_dataframe = pd.read_csv(name_of_file_in_bucket)
-my_dataframe.head()
+if False:
+  # This snippet assumes you run setup first
+  
+  # This code copies file in your Google Bucket and loads it into a dataframe
+  
+  # Replace 'test.csv' with THE NAME of the file you're going to download from the bucket (don't delete the quotation marks)
+  name_of_file_in_bucket = 'us_oxf_all.csv'
+  
+  ########################################################################
+  ##
+  ################# DON'T CHANGE FROM HERE ###############################
+  ##
+  ########################################################################
+  
+  # get the bucket name
+  my_bucket = os.getenv('WORKSPACE_BUCKET')
+  
+  # copy csv file from the bucket to the current working space
+  os.system(f"gsutil cp '{my_bucket}/data/{name_of_file_in_bucket}' .")
+  
+  print(f'[INFO] {name_of_file_in_bucket} is successfully downloaded into your working space')
+  # save dataframe in a csv file in the same workspace as the notebook
+  my_dataframe = pd.read_csv(name_of_file_in_bucket)
+  my_dataframe.head()
 ```
 
 

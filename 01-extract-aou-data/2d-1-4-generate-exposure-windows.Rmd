@@ -12,6 +12,7 @@ output:
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+export = FALSE # for exports during code review
 ```
 
 
@@ -310,6 +311,7 @@ summary_demo_gt
 # Export
 
 ```{r}
+if(export){
 # Export
 
 # Save locally
@@ -339,7 +341,7 @@ system(paste0("gsutil cp ", destination_filename, " ", my_bucket, "/data/"), int
 
 # Check if file is in the bucket
 system(paste0("gsutil ls ", my_bucket, "/data/*.html"), intern=T)
-
+}
 ```
 
 
@@ -415,11 +417,11 @@ summary(train_imputed$married_or_with_sb)
 
 # Convert imputed data back to data.tables
 train_imputed_dt = as.data.table(train_imputed)
-#test_imputed_dt = as.data.table(test_imputed)
+test_imputed_dt = as.data.table(test_imputed)
 
 # Add a column to identify the source of each row
 train_imputed_dt[, source := "train"]
-#test_imputed_dt[, source := "test"]
+test_imputed_dt[, source := "test"]
 
 # Combine the imputed training and testing sets
 cope_auo_imputed = rbindlist(list(train_imputed_dt, test_imputed_dt), use.names = TRUE, fill = TRUE)
@@ -929,6 +931,7 @@ exposure_filename = "combined_exposure_data_final_average.RData"
 # Save combined exposure data as RData
 save(combined_exposure_data_clean, file = exposure_filename)
 
+if(export){
 # First, verify the file is created locally
 if (!file.exists(exposure_filename)) {
   stop("Local file not created successfully")
@@ -969,6 +972,7 @@ tryCatch({
 }, error = function(e) {
   stop(paste("Error in bucket operations:", e$message))
 })
+}
 ```
 
 ```{r}

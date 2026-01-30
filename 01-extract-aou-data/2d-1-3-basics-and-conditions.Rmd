@@ -9,10 +9,9 @@ output:
     toc_float: yes
 ---
 
-
-
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+export = FALSE # for exports during code review
 ```
 
 # Load packages
@@ -136,8 +135,9 @@ dim(dataset_09554080_survey_df)
 head(dataset_09554080_survey_df, 5)
 ```
 
-
+## Export
 ```{r}
+if(export){
 # This snippet assumes that you run setup first
 
 # This code saves your dataframe into a csv file in a "data" folder in Google Bucket
@@ -165,6 +165,7 @@ system(paste0("gsutil cp ./", destination_filename, " ", my_bucket, "/data/"), i
 
 # Check if file is in the bucket
 system(paste0("gsutil ls ", my_bucket, "/data/*.csv"), intern=T)
+}
 ```
 
 # Extract conditions data from AoU
@@ -265,8 +266,9 @@ dim(dataset_93048579_condition_df)
 head(dataset_93048579_condition_df, 5)
 ```
 
-
+## Export
 ```{r}
+if(export){
 # This snippet assumes that you run setup first
 
 # This code saves your dataframe into a csv file in a "data" folder in Google Bucket
@@ -294,6 +296,7 @@ system(paste0("gsutil cp ./", destination_filename, " ", my_bucket, "/data/"), i
 
 # Check if file is in the bucket
 system(paste0("gsutil ls ", my_bucket, "/data/*.csv"), intern=T)
+}
 ```
 
 # Load data
@@ -693,6 +696,7 @@ print(paste0("Unique IDs in final data after join ", df_final %>% select(person_
 # Export
 
 ```{r}
+if(export){
 # This snippet assumes that you run setup first
 
 # This code saves your dataframe into a csv file in a "data" folder in Google Bucket
@@ -720,10 +724,12 @@ system(paste0("gsutil cp ./", destination_filename, " ", my_bucket, "/data/"), i
 
 # Check if file is in the bucket
 system(paste0("gsutil ls ", my_bucket, "/data/*.csv"), intern=T)
+}
 ```
 
 
 ```{r}
+if(export){
 # CONVERT TO PARQUET FILE 
 # This code saves your dataframe into a parquet file in a "data" folder in Google Bucket
 my_dataframe = df_final
@@ -750,5 +756,6 @@ system(paste0("gsutil cp ./", destination_filename, " ", my_bucket, "/data/"), i
 
 # Check if file is in the bucket
 system(paste0("gsutil ls ", my_bucket, "/data/*.parquet"), intern=T)
+}
 ```
 

@@ -65,6 +65,8 @@ from dateutil.relativedelta import relativedelta
 warnings.filterwarnings("ignore")
 WORKSPACE_CDR = os.getenv("WORKSPACE_CDR")
 assert WORKSPACE_CDR, "WORKSPACE_CDR env var is missing"
+
+export = False # for exports during code review
 ```
 
 ```{python}

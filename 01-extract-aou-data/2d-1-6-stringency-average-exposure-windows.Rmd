@@ -5,6 +5,11 @@ date: "2025-04-04"
 output: html_document
 ---
 
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+export = FALSE # for exports during code review
+```
+
 # Load packages
 ```{r}
 # Install specific versions
@@ -119,6 +124,7 @@ df_stringency
 
 # Save
 ```{r}
+if(export){
 ## export as RData
 
 # Save RData
@@ -146,11 +152,13 @@ system(paste0("gsutil cp ./", destination_filename, " ", my_bucket, "/data/"), i
 
 # Check if file is in the bucket
 system(paste0("gsutil ls ", my_bucket, "/data/*.RData"), intern=T)
+}
 
 ```
 
 ## Export as parquet
 ```{r}
+if(export){
 ## export as RData
 
 # Save RData
@@ -178,5 +186,6 @@ system(paste0("gsutil cp ./", destination_filename, " ", my_bucket, "/data/"), i
 
 # Check if file is in the bucket
 system(paste0("gsutil ls ", my_bucket, "/data/*.parquet"), intern=T)
+}
 ```
 

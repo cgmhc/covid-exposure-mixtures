@@ -13,6 +13,7 @@ output:
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+export = FALSE # for exports during code review
 ```
 
 
@@ -422,6 +423,7 @@ system.time({
 # Export
 
 ```{r}
+if(export){
 # Save RData
 # This code saves your RData
 
@@ -447,6 +449,7 @@ system(paste0("gsutil cp ./", destination_filename, " ", my_bucket, "/data/"), i
 
 # Check if file is in the bucket
 system(paste0("gsutil ls ", my_bucket, "/data/*.RData"), intern=T)
+}
 ```
 
 # Import

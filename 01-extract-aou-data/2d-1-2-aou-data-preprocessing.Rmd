@@ -59,6 +59,8 @@ import os
 import subprocess
 WORKSPACE_CDR = os.getenv("WORKSPACE_CDR")
 assert WORKSPACE_CDR, "WORKSPACE_CDR env var is missing"
+
+export = False # for exports during code review
 ```
 
 
@@ -78,7 +80,7 @@ if False: ## old code
 
 
 
-file_cache = "OxCGRT_US_latest.csv"
+file_cache = "OxCGRT_USA_latest.csv"
 us_url = "https://raw.githubusercontent.com/OxCGRT/USA-covid-policy/master/data/OxCGRT_US_latest.csv"
 if not os.path.exists(file_cache):
     us_oxf = pd.read_csv(us_url)
@@ -152,7 +154,7 @@ cope_072020_gad_g = cope_072020_gad_g[['person_id','gad_score_avg','gad_score']]
 
 
 ```{python}
-cope_072020_gad_g_pt_ls = cope_I072020_gad_g['person_id'].tolist()
+cope_072020_gad_g_pt_ls = cope_072020_gad_g['person_id'].tolist()
 cope_072020_gad_g.info()
 ```
 
@@ -220,7 +222,7 @@ us_oxf.info()
 # Export
 
 ```{python}
-if False: 
+if export: 
   # This snippet assumes you run setup first
   
   # This code saves your dataframe into a csv file in a "data" folder in Google Bucket
@@ -252,16 +254,22 @@ if False:
 ```
 
 # Filtered by columns
+## NOTE: CHECK THIS PART
+
 
 ```{python}
+if False: # old code
+  us_oxf = us_oxf[us_oxf['RegionName'].notna()]
+  us_oxf = us_oxf[['RegionName','Date','StringencyIndex_Average']]
+
 us_oxf = us_oxf[us_oxf['RegionName'].notna()]
-us_oxf = us_oxf[['RegionName','Date','StringencyIndex_Average']]
+us_oxf = us_oxf[['RegionName','Date','StringencyIndex']]
 ```
 
 
 # Export
 ```{python}
-if False:
+if export:
   # This snippet assumes you run setup first
   
   # This code saves your dataframe into a csv file in a "data" folder in Google Bucket
@@ -300,16 +308,40 @@ us_oxf_202005= us_oxf[us_oxf['Date'].str.contains('202005')]
 
 
 ```{python}
+if False:
+  ### group for each state, and get the avg SI for each state in May
+  us_oxf_202005_g = us_oxf_202005[['RegionName','StringencyIndex_Average']].groupby('RegionName').mean().reset_index()
+  us_oxf_202005_g = us_oxf_202005_g.rename(columns={'StringencyIndex_Average':'StringencyIndex_Average_202005'})
+
 ### group for each state, and get the avg SI for each state in May
-us_oxf_202005_g = us_oxf_202005[['RegionName','StringencyIndex_Average']].groupby('RegionName').mean().reset_index()
-us_oxf_202005_g = us_oxf_202005_g.rename(columns={'StringencyIndex_Average':'StringencyIndex_Average_202005'})
+us_oxf_202005_g = us_oxf_202005[['RegionName','StringencyIndex']].groupby('RegionName').mean().reset_index()
+us_oxf_202005_g = us_oxf_202005_g.rename(columns={'StringencyIndex':'StringencyIndex_Average_202005'})
 ```
 
+# Load zip3 data
 
 ```{python}
-zip3_state = pd.read_csv('zip3.csv') ## ref: https://github.com/billfienberg/zip3/blob/master/zip3.csv
+if False: # old code
+  zip3_state = pd.read_csv('zip3.csv') ## ref: https://github.com/billfienberg/zip3/blob/master/zip3.csv
+
+# Load zip 3 from github
+zip3_cache = "zip3.csv"
+zip3_url = "https://raw.githubusercontent.com/billfienberg/zip3/master/zip3.csv"
+
+if not os.path.exists(zip3_cache):
+    zip3_state = pd.read_csv(zip3_url)
+    zip3_state.to_csv(zip3_cache, index=False)
+else:
+    zip3_state = pd.read_csv(zip3_cache)
+
+## Rename column
 zip3_state = zip3_state.rename(columns ={'id':'zip3'})
 
+## view
+zip3_state.head()
+```
+
+```{python}
 def zip3_format(x):
     x = str(x)
     if len(x)==1:
@@ -583,7 +615,7 @@ data.info()
 # Export
 
 ```{python}
-if False:
+if export:
   # This snippet assumes you run setup first
   
   # This code saves your dataframe into a csv file in a "data" folder in Google Bucket
@@ -616,7 +648,7 @@ if False:
 
 
 ```{python}
-if False:
+if export:
   # This snippet assumes you run setup first
   
   # This code copies file in your Google Bucket and loads it into a dataframe

@@ -10,8 +10,10 @@ output:
 ---
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+export = FALSE # for exports during code review
 ```
 
+Note: file requires more than 12GB ram to execute
 # Load packages
 ```{r}
 # Install specific versions
@@ -32,7 +34,7 @@ packageVersion("rlang")
 required_packages = c("tidyverse", "bigrquery", "reshape2", "dplyr", 
                        "broom", "writexl", "forcats", "missRanger",
                       "arrow", "ggplot2", "patchwork", "caret", "corrplot", "ck37r",
-                     "future.apply", "remotes", "modelbased", "easystats")
+                     "future.apply", "remotes", "modelbased", "easystats", "gtsummary")
 
 # Function to install missing packages
 install_if_missing = function(package) {
@@ -50,6 +52,13 @@ for (package in required_packages) {
    message(sprintf("Failed to load package: %s\nError: %s", package, e$message))
  })
 }
+```
+
+
+```{r}
+# Installation fix for ck37r
+remotes::install_github("ck37/ck37r")
+library(ck37r)
 ```
 
 
@@ -737,6 +746,7 @@ save(df_indicators, file = df_indicators_filename)
 df_consensus_df_filename = "df_consensus_final.RData"
 save(df_consensus, file = consensus_imputed_df_filename)
 
+if(export){
 # Get bucket name
 my_bucket = "gs://fc-secure-00bb6dc6-222a-4f05-ac93-df7fda15eaeb"
 
@@ -747,6 +757,7 @@ system(paste0("gsutil cp ./", df_consensus_df_filename,      " ", my_bucket, "/d
 
 # Verify the file in the bucket
 system(paste0("gsutil ls ", my_bucket, "/data/*.RData"), intern = TRUE)
+}
 ```
 
 ## Import
@@ -976,6 +987,7 @@ df_consensus_filename = "df_consensus_final.RData"
 cat("Saving df_consensus to", df_consensus_filename, "...\n")
 save(df_consensus, file = df_consensus_filename)
 
+if(export){
 # Get bucket name
 my_bucket = "gs://fc-secure-00bb6dc6-222a-4f05-ac93-df7fda15eaeb"
 
@@ -988,6 +1000,7 @@ cat("Verifying file in bucket...\n")
 system(paste0("gsutil ls ", my_bucket, "/data/", df_consensus_filename), intern = TRUE)
 
 cat("df_consensus with imputed education values has been saved to the bucket.\n")
+}
 ```
 
 ## Import
@@ -1200,6 +1213,7 @@ if (!requireNamespace("writexl", quietly = TRUE)) {
 
 
 ```{r}
+if(export){
 # Define filenames and paths
 summary_table_filename = "propensity_score_regression_summary_wald_final.xlsx"
 my_bucket = "gs://fc-secure-00bb6dc6-222a-4f05-ac93-df7fda15eaeb"
@@ -1212,6 +1226,7 @@ system(paste0("gsutil cp ./", summary_table_filename, " ", my_bucket, "/data/"),
 
 # Verify file is in bucket
 system(paste0("gsutil ls ", my_bucket, "/data/*.xlsx"), intern=TRUE)
+}
 ```
 
 
@@ -1317,6 +1332,7 @@ cat("Range:", sprintf("%.4f - %.4f", se_stats$se_min, se_stats$se_max), "\n")
 
 
 ```{r}
+if(export){
 # Save summary table as parquet
 summary_table_filename = "summary_table_with_odds_ratios_wald_final.parquet"
 arrow::write_parquet(summary_table_wald, summary_table_filename)
@@ -1335,6 +1351,7 @@ system(paste0("gsutil cp ./", ps_model_filename, " ", my_bucket, "/data/"), inte
 # Verify files in bucket 
 system(paste0("gsutil ls ", my_bucket, "/data/*.parquet"), intern=T)
 system(paste0("gsutil ls ", my_bucket, "/data/*.RDS"), intern=T)
+}
 ```
 
 # Response probabilities first iteration
@@ -1431,10 +1448,14 @@ cat(sprintf("Mean: %.3f (SD: %.3f)\n", summary_stats_metrics$log_wt_trim_mean, s
 df_consensus_filename = "df_consensus_with_distributions_wald_final.parquet"
 # Save imputed data as parquet
 write_parquet(df_consensus, df_consensus_filename)
+
+if(export){
 system(paste0("gsutil cp ./", df_consensus_filename, " ", my_bucket, "/data/"), intern=TRUE)
+}
 ```
 
 ```{r}
+if(export){
 # First, verify the files are created locally
 if (!file.exists(df_consensus_filename) || !file.exists(summary_table_filename)) {
   stop("Local files not created successfully")
@@ -1474,6 +1495,7 @@ tryCatch({
 }, error = function(e) {
   stop(paste("Error in bucket operations:", e$message))
 })
+}
 ```
 
 # Summary stats
@@ -1631,6 +1653,7 @@ merged_df = cope_auo %>%
 
 Save dataframe with weights
 ```{r}
+if(export){
 # CONVERT TO PARQUET FILE 
 # This code saves your dataframe into a parquet file in a "data" folder in Google Bucket
 my_dataframe = df_consensus
@@ -1657,9 +1680,11 @@ system(paste0("gsutil cp ./", destination_filename, " ", my_bucket, "/data/"), i
 
 # Check if file is in the bucket
 system(paste0("gsutil ls ", my_bucket, "/data/*.parquet"), intern=T)
+}
 ```
 
 ```{r}
+if(export){
 # Define the parquet filename
 imputed_df_filename = "imputed_data_consensus_with_distributions_final.parquet"
 
@@ -1688,7 +1713,7 @@ tryCatch({
 }, error = function(e) {
     message("Error loading parquet file: ", e$message)
 })
-
+}
 ```
 
 

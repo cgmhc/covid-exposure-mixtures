@@ -55,7 +55,7 @@ packages = c("tidyverse", "haven", "qgcomp", "dplyr", "ggplot2",
 package_install(packages)
 ```
 ```{r}
-dir_tables <- here::here(paste0("01-extract-aou-data/tables/"))
+dir_tables <- here::here(paste0("tables/"))
 ```
 
 
@@ -283,30 +283,143 @@ unique(cope_auo_summary$Race)
 
 
 ```{r}
+# New column for anxiety history
+cope_auo_summary <- cope_auo_summary %>%
+  mutate(
+    consolidated_anxiety_history_lifetime = case_when(
+      # if either is 1 -> 1
+      anxiety_disorder_before_covid_lifetime == 1 |
+        generalized_anxiety_disorder_before_covid_lifetime == 1 ~ 1,
+
+      # if both are missing -> NA
+      is.na(anxiety_disorder_before_covid_lifetime) &
+        is.na(generalized_anxiety_disorder_before_covid_lifetime) ~ NA_real_,
+
+      # otherwise (observed and not 1) -> 0
+      TRUE ~ 0
+    ),
+
+    consolidated_anxiety_history_1yr_before_covid = case_when(
+      anxiety_disorder_1yr_before_covid == 1 |
+        generalized_anxiety_disorder_1yr_before_covid == 1 ~ 1,
+
+      is.na(anxiety_disorder_1yr_before_covid) &
+        is.na(generalized_anxiety_disorder_1yr_before_covid) ~ NA_real_,
+
+      TRUE ~ 0
+    )
+  )
+```
+
+
+## Summary stats
+
+```{r}
+# Check dtypes
+vars <- c(
+  "sex_at_birth",
+  "race",
+  "age_bin",
+  "home_ownership",
+  "household_income_cat",
+  "have_job",
+  "Education",
+  "anxiety_disorder_before_covid_lifetime",
+  "anxiety_disorder_1yr_before_covid",
+  "generalized_anxiety_disorder_before_covid_lifetime",
+  "generalized_anxiety_disorder_1yr_before_covid",
+  "consolidated_anxiety_history_lifetime",
+  "consolidated_anxiety_history_1yr_before_covid"
+)
+
+str(cope_auo_summary[vars])
+```
+
+
+```{r}
+# Sanity Check: Unique Values
+vars <- c(
+  "sex_at_birth",
+  "race",
+  "age_bin",
+  "home_ownership",
+  "household_income_cat",
+  "have_job",
+  "Education",
+  "anxiety_disorder_before_covid_lifetime",
+  "anxiety_disorder_1yr_before_covid",
+  "generalized_anxiety_disorder_before_covid_lifetime",
+  "generalized_anxiety_disorder_1yr_before_covid",
+  "consolidated_anxiety_history_lifetime",
+  "consolidated_anxiety_history_1yr_before_covid"
+)
+
+value_counts_df <- bind_rows(
+  lapply(vars, function(v) {
+    cope_auo_summary %>%
+      mutate(value = .data[[v]]) %>%
+      count(value, name = "n", .drop = FALSE) %>%   # keeps NA
+      mutate(
+        variable = v,
+        value = as.character(value)
+      )
+  })
+) %>%
+  group_by(variable) %>%
+  mutate(
+    pct = round(100 * n / sum(n), 2)
+  ) %>%
+  ungroup() %>%
+  select(variable, value, n, pct) %>%
+  arrange(variable, desc(n))
+
+value_counts_df
+
+```
+
+
+```{r}
 # Get demographic breakdown
 
-## gt summary
+vars <- c(
+  "sex_at_birth",
+  "race",
+  "age_bin",
+  "home_ownership",
+  "household_income_cat",
+  "have_job",
+  "Education",
+  "anxiety_disorder_before_covid_lifetime",
+  "anxiety_disorder_1yr_before_covid",
+  "generalized_anxiety_disorder_before_covid_lifetime",
+  "generalized_anxiety_disorder_1yr_before_covid",
+  "consolidated_anxiety_history_lifetime",
+  "consolidated_anxiety_history_1yr_before_covid"
+)
+
+## Get summary
 summary_demo <- cope_auo_summary %>%
-  tbl_summary(include = c(sex_at_birth, 
-                          race, 
-                          age_bin,
-                          home_ownership,
-                          household_income_cat,
-                          have_job,
-                          Education,
-                          anxiety_disorder_before_covid_lifetime,
-                          anxiety_disorder_1yr_before_covid,
-                          generalized_anxiety_disorder_before_covid_lifetime,
-                          generalized_anxiety_disorder_1yr_before_covid
-                          ),
-              missing = "no",) %>%
-   bold_labels()
+  mutate(
+    across(
+      all_of(vars),
+      ~ fct_explicit_na(factor(.x), na_level = "Missing")
+    )
+  ) %>%
+  tbl_summary(
+    include = all_of(vars),
+    missing = "no",  # Missing is now a real level
+    statistic = all_categorical() ~ "{n} ({p}%)",
+    digits = all_categorical() ~ c(0, 2)
+  ) %>%
+  bold_labels()
 
-## convert to gt
+## Convert to gt
 summary_demo_gt <- as_gt(summary_demo)
-
 summary_demo_gt
 ```
+
+
+
 
 # Export
 

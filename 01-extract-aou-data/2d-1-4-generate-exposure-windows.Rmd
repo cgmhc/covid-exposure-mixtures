@@ -21,7 +21,10 @@ export = FALSE # for exports during code review
 # Install specific versions
 install.packages("data.table")  # Will install latest version (1.16.4)
 install.packages("rlang")       # Will install latest version (1.1.4)
+```
 
+
+```{r}
 # Load these packages first
 library(data.table)
 library(rlang)
@@ -309,6 +312,21 @@ cope_auo_summary <- cope_auo_summary %>%
       TRUE ~ 0
     )
   )
+```
+
+
+```{r}
+# Remove NA from policy
+policy_cols <- c(
+  "C1M_School_closing", "C2M_Workplace_closing", "C3M_Cancel_public_events",
+  "C4M_Restrictions_on_gatherings", "C5M_Close_public_transport",
+  "C6M_Stay_at_home_requirements", "C7M_Restrictions_on_internal_movement"
+)
+
+cope_auo_summary <- cope_auo_summary %>%
+  filter(if_all(all_of(policy_cols), ~ !is.na(.)))
+
+cat("Analytic sample N:", nrow(cope_auo_summary), "\n")
 ```
 
 
@@ -1034,6 +1052,7 @@ policy_cols = c("C1M_School_closing", "C2M_Workplace_closing", "C3M_Cancel_publi
 cat("\nNA counts in cleaned data:\n")
 sapply(policy_cols, function(col) sum(is.na(first_window_data_clean[[col]])))
 ```
+
 
 
 # Export

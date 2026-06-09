@@ -1,0 +1,468 @@
+---
+title: "Modeling Data Preprocessing Visualizations"
+author: "Devon Watts, Pratik Nitin Khadse"
+date: "2026-06-08"
+output:
+  html_document:
+    toc: yes
+    toc_depth: 3
+    toc_float: yes
+---
+
+# Load packages
+
+```{r}
+# Note: In case of dependency issues, Run: update.packages(ask = FALSE, checkBuilt = TRUE)
+# install.packages('rlang')
+
+#' Ensure specified packages are installed and loaded.
+#'
+#' Checks if packages are installed, installs missing ones,
+#' then attempts to load all specified packages. Uses '=' for assignment.
+#'
+#' @param pkg_list A character vector of package names.
+#' @return Invisibly returns a named logical vector indicating load success for each package.
+load_packages = function(pkg_list) {
+  
+  # Ensure package list is unique
+  pkg_list = unique(pkg_list)
+  
+  # Identify installed packages
+  installed_pkgs = rownames(installed.packages())
+  
+  # Find packages that need installation
+  missing_pkgs = pkg_list[!pkg_list %in% installed_pkgs]
+  
+  # Install missing packages if any exist
+  if (length(missing_pkgs) > 0) {
+    message("Installing missing packages: ", paste(missing_pkgs, collapse = ", "))
+    tryCatch({
+      install.packages(missing_pkgs, dependencies = TRUE)
+      # Update the list of known installed packages *after* installation attempt
+      installed_pkgs = rownames(installed.packages()) 
+    }, error = function(e) {
+      warning("Installation failed for some packages: ", conditionMessage(e))
+    })
+  }
+  
+  message("Loading required packages...")
+  # Attempt to load all packages in the list
+  load_status = sapply(pkg_list, function(pkg) {
+    # Check if it's actually installed before trying to load
+    if (pkg %in% installed_pkgs) {
+      # Use require() as it returns TRUE/FALSE, suitable for sapply
+      # suppressPackageStartupMessages keeps the console cleaner
+      loaded = suppressPackageStartupMessages(
+        require(pkg, character.only = TRUE, quietly = TRUE)
+      )
+      if (!loaded) {
+        warning("Failed to load package: ", pkg)
+      }
+      return(loaded)
+    } else {
+      # If it's not in installed_pkgs (even after install attempt)
+      warning("Package '", pkg, "' not found or failed to install. Cannot load.")
+      return(FALSE)
+    }
+  })
+  
+  # Report final status
+  if (all(load_status)) {
+    message("All required packages loaded successfully.")
+  } else {
+    failed_pkgs = names(load_status[!load_status])
+    warning("Failed to load or install the following packages: ",
+            paste(failed_pkgs, collapse = ", "), ".")
+  }
+  
+  # Return the status invisibly (useful for checking programmatically if needed)
+  invisible(load_status)
+}
+
+
+# --- Usage ---
+
+# Define the list of required packages
+required_packages = c('tidyverse', 'haven', 'qgcomp', 'dplyr', 'ggplot2', 'moments', 
+             'naniar', 'VIM', 'missForest', 'tidymodels', 'purrr', 'gridExtra', 
+             'knitr', 'infotheo', 'igraph', 'ggraph', 'lubridate', 'zoo', 
+             'ggridges', 'slider', 'stats', 'reshape2', 'broom', 'gridExtra',
+             'modelsummary', 'sandwich', 'tidyverse', 'arrow', 'pROC', 'tidyr')
+
+# Run the function to install (if needed) and load the packages
+load_packages(required_packages)
+```
+
+```{r}
+# Directory paths
+dir_data <- here::here(paste0("02-modeling/data/"))
+dir_tables <- here::here(paste0("02-modeling/tables/"))
+dir_viz <- here::here(paste0("02-modeling/viz/"))
+
+
+```
+
+
+# Load data
+
+```{r}
+# This snippet assumes that you run setup first
+
+# This code copies a file from your Google Bucket into a dataframe
+
+# replace 'test.csv' with the name of the file in your google bucket (don't delete the quotation marks)
+name_of_file_in_bucket = 'mvp_2d_0725.csv'
+
+########################################################################
+##
+################# DON'T CHANGE FROM HERE ###############################
+##
+########################################################################
+
+# Get the bucket name
+my_bucket = Sys.getenv('WORKSPACE_BUCKET')
+
+# Copy the file from current workspace to the bucket
+system(paste0("gsutil cp ", my_bucket, "/data/", name_of_file_in_bucket, " ."), intern=T)
+
+# Load the file into a dataframe
+cope_auo  = read_csv(name_of_file_in_bucket)
+head(cope_auo)
+
+# Load the parquet file
+parquet_filename = 'df_consensus_with_distributions_wald_final.parquet'
+system(paste0("gsutil cp ", my_bucket, "/data/", parquet_filename, " ."), intern=T)
+conditions_df = read_parquet(parquet_filename)
+head(conditions_df)
+str(conditions_df) # 413,360 in df_consensus_with_distributions_wald_final.parquet
+
+# Converting character columns to factors
+cope_auo$RegionName           = as.factor(cope_auo$RegionName)
+cope_auo$gender               = as.factor(cope_auo$gender)
+cope_auo$has_health_insurance = as.factor(cope_auo$has_health_insurance)
+cope_auo$have_job             = as.factor(cope_auo$have_job)
+cope_auo$college_graduated    = as.factor(cope_auo$college_graduated)
+cope_auo$has_health_insurance = as.factor(cope_auo$has_health_insurance)
+cope_auo$age_bin              = as.factor(cope_auo$age_bin)
+cope_auo$household_income_cat = as.factor(cope_auo$household_income_cat)
+cope_auo$race                 = as.factor(cope_auo$race)
+cope_auo$zip_code             = as.factor(cope_auo$zip_code)
+cope_auo$home_ownership       = as.factor(cope_auo$home_ownership)
+
+# Change column names to use underscores instead of spaces
+colnames(cope_auo) = gsub(" ", "_", colnames(cope_auo))
+
+# Define the filename for the combined exposure data (an .RData file)
+exposure_filename = "combined_exposure_data_final_average.RData"
+
+# Get the bucket name from the environment
+my_bucket = Sys.getenv('WORKSPACE_BUCKET')
+
+# Copy the .RData file from the bucket to your local working directory
+system(paste0("gsutil cp ", my_bucket, "/data/", exposure_filename, " ."), intern = TRUE)
+
+# Check that the file was copied correctly (optional)
+print(list.files())
+
+# Load the RData file into your environment.
+# The load() function returns a character vector with the names of the objects loaded.
+loaded_objs = load(exposure_filename)
+# print(loaded_objs)
+# str(combined_exposure_data_clean)
+```
+
+
+```{r train_test_data}
+#### Load train test pre and post rerandomization data
+my_bucket = Sys.getenv("WORKSPACE_BUCKET")
+
+split_files = c(
+  "train_data_strat_pre_randomization_with_stringency_groupings.parquet",
+  "test_data_strat_pre_randomization_with_stringency_groupings.parquet",
+  "train_data_100_rerandomizations_seed_17496.parquet",
+  "test_data_100_rerandomizations_seed_17496.parquet"
+)
+
+for (f in split_files) {
+  system(paste0("gsutil cp ", my_bucket, "/data/", f, " ", dir_data), intern = TRUE)
+}
+
+train_data_pre_rerand = read_parquet(file.path(dir_data, split_files[1]))
+test_data_pre_rerand = read_parquet(file.path(dir_data, split_files[2]))
+train_data = read_parquet(file.path(dir_data, split_files[3]))
+test_data = read_parquet(file.path(dir_data, split_files[4]))
+```
+
+# Get covariates
+
+```{r}
+#### Get covariates
+
+balance_covariates = c(
+  "age_2020", "home", "maritalstatus", "race", "education", "employment",
+  "insurance", "anxiety_disorder_before_covid_lifetime", "anxiety_disorder_1yr_before_covid",
+  "sex", "birthplace", "generalized_anxiety_disorder_before_covid_lifetime",
+  "generalized_anxiety_disorder_1yr_before_covid", "gad_score_july",
+  "observation_wt_trim"
+)
+existing_covariates = intersect(balance_covariates, names(train_data))
+
+# Sanity check
+setdiff(balance_covariates, names(train_data))
+intersect(c("anxiety_disorder_before_covid_lifetime","anxiety_disorder_1yr_before_covid",
+            "generalized_anxiety_disorder_before_covid_lifetime","generalized_anxiety_disorder_1yr_before_covid"), names(train_data))
+```
+
+# Functions
+
+```{r}
+#### Calculate balance functions
+calculate_balance = function(train_data, test_data, covariates) {
+  balance_results = tibble()
+  categorical_results = list()
+
+  for (var in covariates) {
+    if (!var %in% names(train_data) || !var %in% names(test_data)) next
+
+    train_var = train_data[[var]]
+    test_var = test_data[[var]]
+    train_complete = train_var[!is.na(train_var)]
+    test_complete = test_var[!is.na(test_var)]
+    if (length(train_complete) == 0 || length(test_complete) == 0) next
+
+    if (is.numeric(train_var) && is.numeric(test_var)) {
+      mean_train = mean(train_complete)
+      mean_test = mean(test_complete)
+      var_train = var(train_complete)
+      var_test = var(test_complete)
+      pooled_sd = sqrt((var_train + var_test) / 2)
+      smd = (mean_train - mean_test) / pooled_sd
+      variance_ratio = var_train / var_test
+      ks_test = suppressWarnings(ks.test(train_complete, test_complete))
+
+      balance_results = bind_rows(balance_results, tibble(
+        variable = var,
+        type = "continuous",
+        mean_train = mean_train,
+        mean_test = mean_test,
+        var_train = var_train,
+        var_test = var_test,
+        smd = smd,
+        abs_smd = abs(smd),
+        variance_ratio = variance_ratio,
+        ks_statistic = ks_test$statistic,
+        ks_p_value = ks_test$p.value,
+        n_train = length(train_complete),
+        n_test = length(test_complete)
+      ))
+    } else {
+      train_factor = factor(train_complete)
+      test_factor = factor(test_complete)
+      all_levels = unique(c(levels(train_factor), levels(test_factor)))
+      train_factor = factor(train_complete, levels = all_levels)
+      test_factor = factor(test_complete, levels = all_levels)
+
+      if (length(all_levels) == 2) {
+        prop_train = mean(train_factor == all_levels[1])
+        prop_test = mean(test_factor == all_levels[1])
+        pooled_prop = (prop_train + prop_test) / 2
+        pooled_se = sqrt(pooled_prop * (1 - pooled_prop))
+        smd = (prop_train - prop_test) / pooled_se
+
+        balance_results = bind_rows(balance_results, tibble(
+          variable = var,
+          type = "binary",
+          mean_train = prop_train,
+          mean_test = prop_test,
+          var_train = NA,
+          var_test = NA,
+          smd = smd,
+          abs_smd = abs(smd),
+          variance_ratio = NA,
+          ks_statistic = NA,
+          ks_p_value = NA,
+          n_train = length(train_complete),
+          n_test = length(test_complete)
+        ))
+      } else {
+        combined_data = data.frame(
+          group = factor(c(rep("train", length(train_complete)), rep("test", length(test_complete)))),
+          variable = factor(c(train_complete, test_complete), levels = all_levels)
+        )
+        tryCatch({
+          chi_test = chisq.test(table(combined_data$variable, combined_data$group))
+          n = nrow(combined_data)
+          cramers_v = sqrt(chi_test$statistic / (n * (min(length(all_levels), 2) - 1)))
+          categorical_results[[var]] = list(
+            variable = var,
+            type = "categorical",
+            n_levels = length(all_levels),
+            chi_square = chi_test$statistic,
+            chi_p_value = chi_test$p.value,
+            cramers_v = as.numeric(cramers_v),
+            train_table = table(train_factor),
+            test_table = table(test_factor),
+            n_train = length(train_complete),
+            n_test = length(test_complete)
+          )
+        }, error = function(e) {
+          categorical_results[[var]] = list(
+            variable = var,
+            type = "categorical_error",
+            error = e$message,
+            n_train = length(train_complete),
+            n_test = length(test_complete)
+          )
+        })
+        balance_results = bind_rows(balance_results, tibble(
+          variable = var,
+          type = "categorical",
+          mean_train = NA,
+          mean_test = NA,
+          var_train = NA,
+          var_test = NA,
+          smd = NA,
+          abs_smd = NA,
+          variance_ratio = NA,
+          ks_statistic = NA,
+          ks_p_value = NA,
+          n_train = length(train_complete),
+          n_test = length(test_complete)
+        ))
+      }
+    }
+  }
+
+  list(balance_results = balance_results, categorical_results = categorical_results)
+}
+```
+
+
+```{r}
+#### Combined balance plots
+create_combined_balance_plots = function(balance_results_pre, balance_results_post,
+                                         categorical_results_pre, categorical_results_post,
+                                         smd_limits = c(-0.1, 0.1)) {
+
+  binary_vars = c("sex", "birthplace",
+                  "anxiety_disorder_before_covid_lifetime",
+                  "anxiety_disorder_1yr_before_covid",
+                  "generalized_anxiety_disorder_before_covid_lifetime",
+                  "generalized_anxiety_disorder_1yr_before_covid")
+
+  continuous_pre = balance_results_pre %>%
+    filter(type %in% c("continuous", "binary")) %>%
+    select(variable, smd) %>%
+    mutate(timepoint = "Pre-Rerandomization",
+           variable_type = if_else(variable %in% binary_vars, "Binary", "Continuous"))
+
+  continuous_post = balance_results_post %>%
+    filter(type %in% c("continuous", "binary")) %>%
+    select(variable, smd) %>%
+    mutate(timepoint = "Post-Rerandomization",
+           variable_type = if_else(variable %in% binary_vars, "Binary", "Continuous"))
+
+  continuous_combined = bind_rows(continuous_pre, continuous_post) %>%
+    mutate(abs_smd = abs(smd))
+
+  continuous_comparison = ggplot(continuous_combined,
+                                 aes(x = factor(variable, levels = rev(all_vars_alphabetical)), y = smd)) +
+    geom_hline(yintercept = c(-0.2, -0.1, -0.05, 0, 0.05, 0.1, 0.2),
+               color = c("red", "orange", "darkgreen", "black", "darkgreen", "orange", "red"),
+               linetype = c("dashed", "dashed", "dashed", "solid", "dashed", "dashed", "dashed"),
+               alpha = 0.7) +
+    geom_point(aes(color = timepoint, shape = variable_type), size = 3, alpha = 0.8,
+               position = position_dodge(width = 0.3)) +
+    scale_color_manual(values = c("Pre-Rerandomization" = "#9370DB", "Post-Rerandomization" = "#228B22"),
+                       name = "Timepoint") +
+    scale_shape_manual(values = c("Continuous" = 16, "Binary" = 17), name = "Variable Type") +
+    coord_flip() +
+    scale_x_discrete(labels = relabel_vars) +
+    ylim(smd_limits[1], smd_limits[2]) +
+    labs(title = "Balance Comparison: Pre vs Post Rerandomization (Continuous/Binary Variables)",
+         subtitle = "Standardized Mean Differences (SMD) Between Training and Test Sets",
+         x = "Variables",
+         y = "Standardized Mean Difference",
+         color = "Timepoint",
+         shape = "Variable Type",
+         caption = "Purple = Pre-Rerandomization, Green = Post-Rerandomization\nSMD closer to zero = better balance") +
+    theme_minimal() +
+    theme(plot.title = element_text(size = 14, face = "bold"),
+          plot.subtitle = element_text(size = 12),
+          axis.text.y = element_text(size = 10),
+          legend.position = "bottom") +
+    guides(color = guide_legend(title = "Timepoint", override.aes = list(size = 4)),
+           shape = guide_legend(title = "Variable Type", override.aes = list(size = 4)))
+
+  list(continuous_comparison = continuous_comparison)
+}
+```
+
+
+# Balance analysis
+
+```{r}
+#### Balance analysis
+
+balance_analysis = calculate_balance(train_data, test_data, existing_covariates)
+balance_results = balance_analysis$balance_results
+categorical_results = balance_analysis$categorical_results
+
+balance_analysis_pre_rerand = calculate_balance(train_data_pre_rerand, test_data_pre_rerand, existing_covariates)
+balance_results_pre_rerand = balance_analysis_pre_rerand$balance_results
+categorical_results_pre_rerand = balance_analysis_pre_rerand$categorical_results
+```
+
+
+# Labels
+
+```{r}
+#### Get labels
+
+all_vars_alphabetical = sort(unique(c(
+  balance_results_pre_rerand$variable, balance_results$variable,
+  names(categorical_results_pre_rerand), names(categorical_results)
+)))
+
+pretty_var_labels = c(
+  age_2020 = "Age (2020)",
+  sex = "Sex",
+  birthplace = "Birthplace",
+  gad_score_july = "GAD-7 Score (July)",
+  observation_wt_trim = "Observation Weight (trimmed)",
+  anxiety_disorder_before_covid_lifetime = "Anxiety Disorder (lifetime; SNOMED: 197480006)",
+  anxiety_disorder_1yr_before_covid = "Anxiety Disorder (1 year; SNOMED: 197480006)",
+  generalized_anxiety_disorder_before_covid_lifetime = "Generalized Anxiety Disorder (lifetime; SNOMED: 21897009)",
+  generalized_anxiety_disorder_1yr_before_covid = "Generalized Anxiety Disorder (1 year; SNOMED: 21897009)"
+)
+relabel_vars = function(x) { out = pretty_var_labels[x]; ifelse(is.na(out), x, out) }
+```
+
+
+# Viz
+
+```{r}
+#### Viz
+
+# Plot
+plots_combined = create_combined_balance_plots(
+  balance_results_pre_rerand, balance_results,
+  categorical_results_pre_rerand, categorical_results,
+  smd_limits = c(-0.1, 0.1)
+)
+
+plots_combined$continuous_comparison
+```
+
+
+```{r}
+#### Export
+ggsave(file.path(dir_viz, "continuous_balance_before_and_after_rerandomization_seed_17496.pdf"),
+       plots_combined$continuous_comparison, width = 14, height = 8, device = "pdf")
+
+ggsave(file.path(dir_viz, "continuous_balance_before_and_after_rerandomization_seed_17496.png"),
+       plots_combined$continuous_comparison, width = 14, height = 8, dpi = 300, device = "png")
+
+
+```
+

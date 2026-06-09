@@ -57,6 +57,7 @@ packages = c("tidyverse", "haven", "qgcomp", "dplyr", "ggplot2",
 # Call the package_install function 
 package_install(packages)
 ```
+
 ```{r}
 dir_tables <- here::here(paste0("tables/"))
 ```
